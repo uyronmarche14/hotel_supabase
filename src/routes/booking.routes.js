@@ -75,11 +75,11 @@ router.get('/summary', async (req, res, next) => {
   }
 });
 
-// Get booking history with stats
+// Get booking history with stats - accessible to authenticated users
 router.get('/history', bookingController.getBookingHistory);
 
-// Get booking history for a specific user (admin only)
-router.get('/history/:email', authMiddleware.isAdmin, bookingController.getUserBookingHistory);
+// Get booking history for a specific user
+router.get('/history/:email', bookingController.getUserBookingHistory);
 
 // Get a specific booking by ID
 router.get('/:id', bookingController.getBookingById);

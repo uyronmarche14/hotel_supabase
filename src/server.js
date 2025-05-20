@@ -17,6 +17,8 @@ const bookingRoutes = require('./routes/booking.routes');
 const userRoutes = require('./routes/user.routes');
 const adminRoutes = require('./routes/admin.routes');
 const adminAuthRoutes = require('./routes/admin.auth.routes');
+const imageRoutes = require('./routes/image.routes');
+const debugRoutes = require('./routes/debug.routes'); // Import debug routes
 
 // Initialize express app
 const app = express();
@@ -25,29 +27,12 @@ const PORT = process.env.PORT || 10000;
 // Middleware
 app.use(helmet()); // Security headers
 app.use(morgan('dev')); // Logging
-// Configure CORS with specific options for frontend compatibility
+// Configure CORS with more permissive options for development
 app.use(cors({
-  origin: function(origin, callback) {
-    // Allow requests with no origin (like mobile apps, curl, etc)
-    if (!origin) return callback(null, true);
-    
-    const allowedOrigins = [
-      'http://localhost:3000',
-      'http://localhost:3001',
-      'http://localhost:3002',
-      'http://localhost:3003',
-      process.env.CORS_ORIGIN
-    ].filter(Boolean); // Remove undefined/null values
-    
-    if (allowedOrigins.indexOf(origin) !== -1 || !origin) {
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS'));
-    }
-  },
+  origin: true, // Allow all origins in development
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With']
 }));
 
 // Handle preflight requests
@@ -66,10 +51,14 @@ app.use('/api/hotels', hotelRoutes); // Map to room.routes.js but keep the old p
 // Add new route mount point that matches the frontend expected path
 app.use('/api/rooms', hotelRoutes); // Duplicate mount point for compatibility with frontend
 
+// Add debug routes for troubleshooting
+app.use('/api/debug', debugRoutes);
+
 app.use('/api/bookings', bookingRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/admin/auth', adminAuthRoutes); // Admin-specific auth routes
+app.use('/api/images', imageRoutes); // Cloudinary and image management routes
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {

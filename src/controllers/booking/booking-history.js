@@ -92,16 +92,16 @@ const getBookingHistory = async (req, res, next) => {
       }
     });
     
+    // Format the response to match what the frontend expects
     res.status(200).json({
       success: true,
-      history: {
-        bookings: bookingsResponse,
-        stats: {
-          totalSpent: parseFloat(totalSpent.toFixed(2)),
-          averagePerBooking: parseFloat(averagePerBooking.toFixed(2)),
-          mostVisitedCategory,
-          totalBookings: bookings.length
-        }
+      count: bookingsResponse.length,
+      data: bookingsResponse,
+      stats: {
+        totalSpent: parseFloat(totalSpent.toFixed(2)),
+        averagePerBooking: parseFloat(averagePerBooking.toFixed(2)),
+        mostVisitedCategory,
+        totalBookings: bookings.length
       }
     });
   } catch (error) {

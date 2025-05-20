@@ -3,30 +3,30 @@
  * Exports all booking-related controller functions
  */
 
-const userBookings = require('./user-bookings');
-const bookingOperations = require('./booking-operations');
-const bookingAvailability = require('./booking-availability');
-const adminBookings = require('./admin-bookings');
-const bookingHistory = require('./booking-history');
+const userBookings = require("./user-bookings");
+const bookingOperations = require("./booking-operations");
+const bookingAvailability = require("./booking-availability");
+const bookingHistory = require("./booking-history");
+const adminBookings = require("./admin-bookings");
 
 module.exports = {
-  // User booking functions
+  // User booking operations
   getUserBookings: userBookings.getUserBookings,
   getBookingById: userBookings.getBookingById,
-  
-  // Booking operations
+
+  // Booking management
   createBooking: bookingOperations.createBooking,
   updateBooking: bookingOperations.updateBooking,
   cancelBooking: bookingOperations.cancelBooking,
-  
-  // Availability checking
+
+  // Booking validation
   checkRoomAvailability: bookingAvailability.checkRoomAvailability,
   
-  // Booking history and statistics
+  // Booking history
   getBookingHistory: bookingHistory.getBookingHistory,
-  getUserBookingHistory: bookingHistory.getUserBookingHistory,
+  getUserBookingHistory: bookingHistory.getUserBookingHistory || userBookings.getUserBookings,
   
-  // Admin booking functions
+  // Admin booking operations
   getAllBookings: adminBookings.getAllBookings,
-  updateBookingStatus: adminBookings.updateBookingStatus,
+  updateBookingStatus: adminBookings.updateBookingStatus || bookingOperations.updateBooking,
 };

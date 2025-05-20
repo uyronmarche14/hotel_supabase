@@ -67,7 +67,7 @@ const getUserBookings = async (req, res, next) => {
     res.status(200).json({
       success: true,
       count: bookings.length,
-      bookings: bookingsResponse
+      data: bookingsResponse
     });
   } catch (error) {
     next(new AppError(error.message, 500));
