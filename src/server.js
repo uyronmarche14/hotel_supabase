@@ -18,6 +18,7 @@ const userRoutes = require('./routes/user.routes');
 const adminRoutes = require('./routes/admin.routes');
 const adminAuthRoutes = require('./routes/admin.auth.routes');
 const imageRoutes = require('./routes/image.routes');
+const cloudinaryRoutes = require('./routes/cloudinary.routes');
 const debugRoutes = require('./routes/debug.routes'); // Import debug routes
 
 // Initialize express app
@@ -29,14 +30,15 @@ app.use(helmet()); // Security headers
 app.use(morgan('dev')); // Logging
 // Configure CORS with more permissive options for development
 app.use(cors({
-  origin: true, // Allow all origins in development
+  origin: ['http://localhost:3000', 'http://127.0.0.1:3000', 'https://api.cloudinary.com'],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With']
+  allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With', 'Origin']
 }));
 
 // Handle preflight requests
 app.options('*', cors());
+
 app.use(express.json()); // Parse JSON bodies
 app.use(express.urlencoded({ extended: true })); // Parse URL-encoded bodies
 app.use(cookieParser()); // Parse cookies
@@ -59,6 +61,7 @@ app.use('/api/users', userRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/admin/auth', adminAuthRoutes); // Admin-specific auth routes
 app.use('/api/images', imageRoutes); // Cloudinary and image management routes
+app.use('/api/cloudinary', cloudinaryRoutes); // Direct Cloudinary upload routes
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {

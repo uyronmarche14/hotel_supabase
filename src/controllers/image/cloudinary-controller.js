@@ -5,11 +5,194 @@
 
 const { supabaseClient } = require('../../config/supabase');
 const AppError = require('../../utils/appError');
+const crypto = require('crypto');
 const { 
   deleteImage, 
   getPublicIdFromUrl 
 } = require('../../utils/storage/cloudinaryStorage');
 const cloudinary = require('../../config/cloudinary');
+
+/**
+ * Generate a Cloudinary upload signature for direct frontend uploads
+ * @param {object} req - Express request object
+ * @param {object} res - Express response object
+ * @param {function} next - Express next middleware function
+ */
+const generateSignature = async (req, res, next) => {
+  try {
+    // Generate a timestamp
+    const timestamp = Math.round(new Date().getTime() / 1000);
+    
+    // Set folder based on query params or default to 'rooms'
+    const folder = req.query.folder || 'rooms';
+    
+    // Create the signature payload
+    const payload = {
+      timestamp: timestamp,
+      folder: folder
+    };
+    
+    // Add any additional restrictions
+    if (req.query.public_id) {
+      payload.public_id = req.query.public_id;
+    }
+    
+    // Create the signature string
+    const signatureString = Object.keys(payload)
+      .sort()
+      .map(key => `${key}=${payload[key]}`)
+      .join('&') + process.env.CLOUDINARY_API_SECRET;
+    
+    // Generate the SHA-1 hash
+    const signature = crypto
+      .createHash('sha1')
+      .update(signatureString)
+      .digest('hex');
+    
+    // Return the necessary data for frontend direct upload
+    res.status(200).json({
+      success: true,
+      signature,
+      timestamp,
+      api_key: process.env.CLOUDINARY_API_KEY,
+      folder,
+      cloudName: process.env.CLOUDINARY_CLOUD_NAME
+    });
+  } catch (error) {
+    console.error('Error generating signature:', error);
+    next(new AppError('Failed to generate upload signature', 500));
+  }
+};
+
+/**
+ * Synchronize image info with database after direct upload
+ * @param {object} req - Express request object
+ * @param {object} res - Express response object
+ * @param {function} next - Express next middleware function
+ */
+const syncImage = async (req, res, next) => {
+  try {
+    const { entityType, id } = req.params;
+    const { image_url, public_id, is_main_image = false } = req.body;
+    
+    if (!image_url) {
+      return next(new AppError('Image URL is required', 400));
+    }
+    
+    console.log(`Syncing image for ${entityType} with ID ${id}:`, {
+      image_url: image_url.substring(0, 50) + '...',
+      public_id,
+      is_main_image
+    });
+    
+    // Handle room images
+    if (entityType === 'rooms') {
+      // Check if room exists
+      const { data: room, error: findError } = await supabaseClient
+        .from('rooms')
+        .select('id, image_url, images')
+        .eq('id', id)
+        .single();
+      
+      if (findError || !room) {
+        return next(new AppError('Room not found', 404));
+      }
+      
+      // Prepare update data
+      const updateData = {};
+      
+      // If this is the main image or there's no main image set
+      if (is_main_image || !room.image_url) {
+        updateData.image_url = image_url;
+      }
+      
+      // Add to images array if not already there
+      let images = Array.isArray(room.images) ? [...room.images] : [];
+      if (!images.includes(image_url)) {
+        images.push(image_url);
+        updateData.images = images;
+      }
+      
+      // Update the room
+      const { error: updateError } = await supabaseClient
+        .from('rooms')
+        .update(updateData)
+        .eq('id', id);
+      
+      if (updateError) {
+        console.error('Failed to update room with image:', updateError);
+        return next(new AppError('Failed to update room with image', 500));
+      }
+      
+      res.status(200).json({
+        success: true,
+        message: 'Room updated with new image',
+        image_url,
+        is_main_image: updateData.image_url === image_url
+      });
+    } else {
+      return next(new AppError(`Entity type '${entityType}' not supported`, 400));
+    }
+  } catch (error) {
+    console.error('Error syncing image:', error);
+    next(new AppError('Failed to sync image with database', 500));
+  }
+};
+
+/**
+ * Test Cloudinary connection
+ * @param {object} req - Express request object
+ * @param {object} res - Express response object
+ * @param {function} next - Express next middleware function
+ */
+const testConnection = async (req, res, next) => {
+  try {
+    console.log('Cloudinary Environment Variables Check:');
+    console.log('- CLOUDINARY_CLOUD_NAME:', process.env.CLOUDINARY_CLOUD_NAME || 'NOT SET');
+    console.log('- CLOUDINARY_API_KEY:', process.env.CLOUDINARY_API_KEY ? 'SET' : 'NOT SET');
+    console.log('- CLOUDINARY_API_SECRET:', process.env.CLOUDINARY_API_SECRET ? 'SET' : 'NOT SET');
+    
+    // Test signature generation
+    const timestamp = Math.round(new Date().getTime() / 1000);
+    const folder = 'test';
+    const signatureString = `folder=${folder}&timestamp=${timestamp}${process.env.CLOUDINARY_API_SECRET}`;
+    
+    // Generate the SHA-1 hash
+    const signature = crypto
+      .createHash('sha1')
+      .update(signatureString)
+      .digest('hex');
+      
+    console.log('Test signature generation:', {
+      timestamp,
+      folder,
+      signature: signature ? signature.substring(0, 6) + '...' : 'FAILED'
+    });
+    
+    // Test if we can access the Cloudinary API
+    const result = await cloudinary.api.ping();
+    
+    res.status(200).json({
+      success: true,
+      message: 'Cloudinary connection successful',
+      cloudName: process.env.CLOUDINARY_CLOUD_NAME,
+      apiKeyPresent: !!process.env.CLOUDINARY_API_KEY,
+      apiSecretPresent: !!process.env.CLOUDINARY_API_SECRET,
+      testSignature: signature.substring(0, 6) + '...',
+      result
+    });
+  } catch (error) {
+    console.error('Cloudinary connection test failed:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Cloudinary connection failed',
+      cloudName: process.env.CLOUDINARY_CLOUD_NAME || 'NOT SET',
+      apiKeyPresent: !!process.env.CLOUDINARY_API_KEY,
+      apiSecretPresent: !!process.env.CLOUDINARY_API_SECRET,
+      error: error.message
+    });
+  }
+};
 
 /**
  * Delete an image from Cloudinary and update references in the database
@@ -265,6 +448,9 @@ const getCloudinaryImageInfo = async (req, res, next) => {
 
 module.exports = {
   deleteCloudinaryImage,
+  generateSignature,
+  syncImage,
+  testConnection,
   transformCloudinaryImage,
   getCloudinaryImageInfo
 };
