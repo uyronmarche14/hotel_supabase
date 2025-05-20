@@ -7,4 +7,4 @@
  */
 
 // Export all booking controller functions from the modular implementation
-module.exports = require('./booking');
+module.exports = require('./booking/index');

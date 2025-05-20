@@ -7,4 +7,4 @@
  */
 
 // Export all auth controller functions from the modular implementation
-module.exports = require('./auth');
+module.exports = require('./auth/index');

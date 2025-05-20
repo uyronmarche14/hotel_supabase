@@ -1,17 +1,12 @@
 /**
- * Room Controller
- * Handles room-related operations
- * 
- * This is now a facade that redirects to the modular implementation
- * in the room/ directory for better maintainability.
+ * Room Controller - Index File
+ * Exports all room-related controller functions
  */
 
-// Import the modular implementations directly from their source files
-const roomQuery = require('./room/room-query');
-const roomOperations = require('./room/room-operations');
-const imageManagement = require('./room/image-management');
+const roomQuery = require('./room-query');
+const roomOperations = require('./room-operations');
+const imageManagement = require('./image-management');
 
-// Export all functions
 module.exports = {
   // Room query functions
   getAllRooms: roomQuery.getAllRooms,

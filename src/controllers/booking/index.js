@@ -7,6 +7,7 @@ const userBookings = require('./user-bookings');
 const bookingOperations = require('./booking-operations');
 const bookingAvailability = require('./booking-availability');
 const adminBookings = require('./admin-bookings');
+const bookingHistory = require('./booking-history');
 
 module.exports = {
   // User booking functions
@@ -20,6 +21,10 @@ module.exports = {
   
   // Availability checking
   checkRoomAvailability: bookingAvailability.checkRoomAvailability,
+  
+  // Booking history and statistics
+  getBookingHistory: bookingHistory.getBookingHistory,
+  getUserBookingHistory: bookingHistory.getUserBookingHistory,
   
   // Admin booking functions
   getAllBookings: adminBookings.getAllBookings,

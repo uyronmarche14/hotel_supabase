@@ -26,22 +26,40 @@ const createBooking = async (req, res, next) => {
     // Get user ID from request or use guest ID
     const userId = req.user?.id || req.body.user_id || 'guest-' + Date.now();
     
-    // Extract booking data from request body - use a mutable variable for roomId
+    // Extract booking data from request body with proper field mapping
     const {
-      check_in,
-      check_out,
-      total_price,
+      checkIn,
+      checkOut,
+      totalPrice,
       nights,
       adults,
       children,
-      payment_method,
-      special_requests,
-      user_email,
-      user_name
+      paymentMethod,
+      specialRequests,
+      email,
+      firstName,
+      lastName,
+      phone,
+      basePrice,
+      taxAndFees,
+      roomTitle,
+      roomType,
+      roomCategory,
+      roomImage,
+      location
     } = req.body;
     
-    // Extract room_id separately so we can modify it
-    let roomId = req.body.room_id;
+    // Map frontend camelCase to database snake_case
+    const check_in = checkIn;
+    const check_out = checkOut;
+    const total_price = totalPrice;
+    const payment_method = paymentMethod;
+    const special_requests = specialRequests;
+    const base_price = basePrice || (total_price ? total_price * 0.9 : 0); // Fallback calculation if not provided
+    const tax_and_fees = taxAndFees || (total_price ? total_price * 0.1 : 0);
+    
+    // Extract roomId separately so we can modify it
+    let roomId = req.body.roomId || req.body.room_id;
     
     console.log('Creating new booking with data:', JSON.stringify(req.body, null, 2));
 
@@ -52,7 +70,7 @@ const createBooking = async (req, res, next) => {
       // Get a fallback room to use instead
       const { data: fallbackRooms, error: fallbackError } = await supabaseClient
         .from('rooms')
-        .select('id, title, image_url, category, price')
+        .select('id, title, image_url, category, price, type')
         .limit(1);
       
       if (fallbackError || !fallbackRooms || fallbackRooms.length === 0) {
@@ -74,7 +92,7 @@ const createBooking = async (req, res, next) => {
     try {
       const { data: roomData, error: roomError } = await supabaseClient
         .from('rooms')
-        .select('id, title, image_url, category, price')
+        .select('id, title, image_url, category, price, type')
         .eq('id', roomId)
         .single();
 
@@ -120,21 +138,33 @@ const createBooking = async (req, res, next) => {
       });
     }
     
-    // Create a properly formatted booking record with all required fields
+    // Generate a unique booking ID
+    const bookingId = 'BK-' + Date.now().toString().slice(-6) + '-' + Math.floor(Math.random() * 1000);
+    
+    // Create a properly formatted booking record with all required fields that match the database schema
     const bookingData = {
       room_id: roomId,
       user_id: userId,
+      booking_id: bookingId,
       check_in: check_in,
       check_out: check_out,
-      total_price: calculatedTotalPrice,
       nights: nights || 1,
-      adults: adults || 1,
-      children: children || 0,
-      payment_method: payment_method || 'credit_card',
-      special_requests: special_requests || '',
+      guests: adults || 1, // Use adults as guests since our schema has guests, not adults
+      payment_status: 'pending',
       status: 'confirmed',
-      user_email: user_email,
-      user_name: user_name
+      total_price: calculatedTotalPrice,
+      base_price: base_price,
+      tax_and_fees: tax_and_fees,
+      first_name: firstName || 'Guest',
+      last_name: lastName || 'User',
+      email: email || 'guest@example.com',
+      phone: phone || 'N/A',
+      special_requests: special_requests || '',
+      room_type: roomType || room.type || 'standard',
+      room_title: roomTitle || room.title,
+      room_category: roomCategory || room.category,
+      room_image: roomImage || room.image_url,
+      location: location || 'Taguig, Metro Manila'
     };
 
     // Insert the booking into the database
@@ -156,19 +186,26 @@ const createBooking = async (req, res, next) => {
     // Transform the response for frontend compatibility
     const bookingResponse = {
       id: newBooking.id,
+      bookingId: newBooking.booking_id,
       roomId: newBooking.room_id,
-      roomTitle: room.title,
-      roomImage: room.image_url,
-      roomCategory: room.category,
+      roomTitle: newBooking.room_title,
+      roomImage: newBooking.room_image,
+      roomCategory: newBooking.room_category,
       checkIn: newBooking.check_in,
       checkOut: newBooking.check_out,
       totalPrice: newBooking.total_price,
+      basePrice: newBooking.base_price,
+      taxAndFees: newBooking.tax_and_fees,
       nights: newBooking.nights,
       status: newBooking.status,
-      paymentMethod: newBooking.payment_method,
+      paymentStatus: newBooking.payment_status,
+      firstName: newBooking.first_name,
+      lastName: newBooking.last_name,
+      email: newBooking.email,
+      phone: newBooking.phone,
       specialRequests: newBooking.special_requests,
-      adults: newBooking.adults,
-      children: newBooking.children,
+      guests: newBooking.guests,
+      location: newBooking.location, 
       createdAt: newBooking.created_at
     };
 

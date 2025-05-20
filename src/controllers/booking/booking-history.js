@@ -1,19 +1,19 @@
 /**
- * User Bookings Controller
- * Handles user-specific booking operations
+ * Booking History Controller
+ * Handles booking history and statistics functions
  */
 
 const { supabaseClient } = require('../../config/supabase');
 const AppError = require('../../utils/appError');
-const { validationResult } = require('express-validator');
 
 /**
- * Get all bookings for the current user
+ * Get booking history with stats
  */
-const getUserBookings = async (req, res, next) => {
+const getBookingHistory = async (req, res, next) => {
   try {
     const userId = req.user.id;
-
+    
+    // Get all user bookings with room details
     const { data: bookings, error } = await supabaseClient
       .from('bookings')
       .select(`
@@ -23,32 +23,33 @@ const getUserBookings = async (req, res, next) => {
           image_url,
           category,
           price,
-          location
+          location,
+          type
         )
       `)
       .eq('user_id', userId)
       .order('created_at', { ascending: false });
-
+    
     if (error) {
       return next(new AppError(error.message, 500));
     }
-
+    
     // Transform data for frontend compatibility
     const bookingsResponse = bookings.map(booking => ({
       id: booking.id,
-      bookingId: booking.booking_id,
+      bookingId: booking.booking_id || `BK-${Date.now().toString().slice(-6)}`,
       roomId: booking.room_id,
       roomTitle: booking.room_title || booking.rooms?.title || '',
       roomImage: booking.room_image || booking.rooms?.image_url || '',
       roomCategory: booking.room_category || booking.rooms?.category || '',
-      roomType: booking.room_type || '',
+      roomType: booking.room_type || booking.rooms?.type || '',
       roomPrice: booking.rooms?.price || 0,
       roomLocation: booking.location || booking.rooms?.location || '',
       checkIn: booking.check_in,
       checkOut: booking.check_out,
       totalPrice: booking.total_price,
-      basePrice: booking.base_price || 0,
-      taxAndFees: booking.tax_and_fees || 0,
+      basePrice: booking.base_price || (booking.total_price ? booking.total_price * 0.9 : 0),
+      taxAndFees: booking.tax_and_fees || (booking.total_price ? booking.total_price * 0.1 : 0),
       nights: booking.nights,
       status: booking.status,
       paymentStatus: booking.payment_status || 'pending',
@@ -63,11 +64,45 @@ const getUserBookings = async (req, res, next) => {
       children: booking.children || 0,
       createdAt: booking.created_at
     }));
-
+    
+    // Calculate stats
+    const totalSpent = bookings.reduce((sum, booking) => 
+      booking.status !== 'cancelled' ? sum + (booking.total_price || 0) : sum, 0);
+    
+    const nonCancelledBookings = bookings.filter(booking => booking.status !== 'cancelled');
+    const averagePerBooking = nonCancelledBookings.length > 0 ? 
+      totalSpent / nonCancelledBookings.length : 0;
+    
+    // Find most visited category
+    const categoryCount = {};
+    bookings.forEach(booking => {
+      const category = booking.room_category || booking.rooms?.category;
+      if (booking.status !== 'cancelled' && category) {
+        categoryCount[category] = (categoryCount[category] || 0) + 1;
+      }
+    });
+    
+    let mostVisitedCategory = null;
+    let maxCount = 0;
+    
+    Object.entries(categoryCount).forEach(([category, count]) => {
+      if (count > maxCount) {
+        mostVisitedCategory = category;
+        maxCount = count;
+      }
+    });
+    
     res.status(200).json({
       success: true,
-      count: bookings.length,
-      bookings: bookingsResponse
+      history: {
+        bookings: bookingsResponse,
+        stats: {
+          totalSpent: parseFloat(totalSpent.toFixed(2)),
+          averagePerBooking: parseFloat(averagePerBooking.toFixed(2)),
+          mostVisitedCategory,
+          totalBookings: bookings.length
+        }
+      }
     });
   } catch (error) {
     next(new AppError(error.message, 500));
@@ -75,15 +110,25 @@ const getUserBookings = async (req, res, next) => {
 };
 
 /**
- * Get booking by ID
+ * Get booking history for a specific user (admin only)
  */
-const getBookingById = async (req, res, next) => {
+const getUserBookingHistory = async (req, res, next) => {
   try {
-    const { id } = req.params;
-    const userId = req.user.id;
-
-    // Users can only view their own bookings unless they are admins
-    let query = supabaseClient
+    const { email } = req.params;
+    
+    // Find user by email
+    const { data: user, error: userError } = await supabaseClient
+      .from('users')
+      .select('id')
+      .eq('email', email)
+      .single();
+    
+    if (userError || !user) {
+      return next(new AppError('User not found', 404));
+    }
+    
+    // Get all user bookings with room details
+    const { data: bookings, error } = await supabaseClient
       .from('bookings')
       .select(`
         *,
@@ -93,39 +138,32 @@ const getBookingById = async (req, res, next) => {
           category,
           price,
           location,
-          amenities
+          type
         )
       `)
-      .eq('id', id);
-
-    // If not admin, restrict to user's own bookings
-    if (req.user.role !== 'admin') {
-      query = query.eq('user_id', userId);
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false });
+    
+    if (error) {
+      return next(new AppError(error.message, 500));
     }
-
-    const { data: booking, error } = await query.single();
-
-    if (error || !booking) {
-      return next(new AppError('Booking not found or access denied', 404));
-    }
-
+    
     // Transform data for frontend compatibility
-    const bookingResponse = {
+    const bookingsResponse = bookings.map(booking => ({
       id: booking.id,
-      bookingId: booking.booking_id,
+      bookingId: booking.booking_id || `BK-${Date.now().toString().slice(-6)}`,
       roomId: booking.room_id,
       roomTitle: booking.room_title || booking.rooms?.title || '',
       roomImage: booking.room_image || booking.rooms?.image_url || '',
       roomCategory: booking.room_category || booking.rooms?.category || '',
-      roomType: booking.room_type || '',
+      roomType: booking.room_type || booking.rooms?.type || '',
       roomPrice: booking.rooms?.price || 0,
       roomLocation: booking.location || booking.rooms?.location || '',
-      roomAmenities: booking.rooms?.amenities || [],
       checkIn: booking.check_in,
       checkOut: booking.check_out,
       totalPrice: booking.total_price,
-      basePrice: booking.base_price || 0,
-      taxAndFees: booking.tax_and_fees || 0,
+      basePrice: booking.base_price || (booking.total_price ? booking.total_price * 0.9 : 0),
+      taxAndFees: booking.tax_and_fees || (booking.total_price ? booking.total_price * 0.1 : 0),
       nights: booking.nights,
       status: booking.status,
       paymentStatus: booking.payment_status || 'pending',
@@ -135,15 +173,16 @@ const getBookingById = async (req, res, next) => {
       email: booking.email || '',
       phone: booking.phone || '',
       specialRequests: booking.special_requests || '',
-      guests: booking.guests || 0,  // Use guests from DB schema
+      guests: booking.guests || 0,  // Use guests instead of adults from schema
       adults: booking.guests || 0,   // For backward compatibility
       children: booking.children || 0,
       createdAt: booking.created_at
-    };
-
+    }));
+    
     res.status(200).json({
       success: true,
-      booking: bookingResponse
+      email: email,
+      bookings: bookingsResponse
     });
   } catch (error) {
     next(new AppError(error.message, 500));
@@ -151,6 +190,6 @@ const getBookingById = async (req, res, next) => {
 };
 
 module.exports = {
-  getUserBookings,
-  getBookingById
+  getBookingHistory,
+  getUserBookingHistory
 };

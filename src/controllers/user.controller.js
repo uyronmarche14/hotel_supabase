@@ -7,4 +7,4 @@
  */
 
 // Export all user controller functions from the modular implementation
-module.exports = require('./user');
+module.exports = require('./user/index');
