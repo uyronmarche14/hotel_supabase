@@ -29,7 +29,9 @@ app.use(helmet()); // Security headers
 app.use(morgan('dev')); // Logging
 // Configure CORS with more permissive options for development
 app.use(cors({
-  origin: ['http://localhost:3000', 'http://127.0.0.1:3000', 'https://api.cloudinary.com'],
+  origin: process.env.CORS_ORIGIN ? 
+    [process.env.CORS_ORIGIN,'https://hotel-supabase.onrender.com', 'https://api.cloudinary.com'] : 
+    ['http://localhost:3000', 'http://127.0.0.1:3000', 'https://api.cloudinary.com'],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
   allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With', 'Origin']
