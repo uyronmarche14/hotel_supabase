@@ -19,7 +19,6 @@ const adminRoutes = require('./routes/admin.routes');
 const adminAuthRoutes = require('./routes/admin.auth.routes');
 const imageRoutes = require('./routes/image.routes');
 const cloudinaryRoutes = require('./routes/cloudinary.routes');
-const debugRoutes = require('./routes/debug.routes'); // Import debug routes
 
 // Initialize express app
 const app = express();
@@ -46,15 +45,15 @@ app.use(cookieParser()); // Parse cookies
 // Apply token refresh middleware to all routes
 app.use(refreshTokenIfNeeded);
 
-// API routes - matching the old backend structure
+// API routes
 app.use('/api/auth', authRoutes);
-app.use('/api/hotels', hotelRoutes); // Map to room.routes.js but keep the old path
 
-// Add new route mount point that matches the frontend expected path
-app.use('/api/rooms', hotelRoutes); // Duplicate mount point for compatibility with frontend
-
-// Add debug routes for troubleshooting
-app.use('/api/debug', debugRoutes);
+// Use a single router for both /api/hotels and /api/rooms paths
+// This approach reduces memory usage while maintaining backward compatibility
+const combinedRouter = express.Router();
+combinedRouter.use('/', hotelRoutes);
+app.use('/api/hotels', combinedRouter);
+app.use('/api/rooms', combinedRouter);
 
 app.use('/api/bookings', bookingRoutes);
 app.use('/api/users', userRoutes);

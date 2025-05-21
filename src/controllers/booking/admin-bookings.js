@@ -11,7 +11,7 @@ const AppError = require('../../utils/appError');
  */
 const getAllBookings = async (req, res, next) => {
   try {
-    console.log('Admin fetching all bookings');
+    // Admin fetching all bookings
     
     // Get pagination and filter parameters from query string with validation
     const page = Math.max(parseInt(req.query.page) || 1, 1); // Ensure minimum page is 1
@@ -58,7 +58,7 @@ const getAllBookings = async (req, res, next) => {
       return next(new AppError(`Database error: ${countError.message}`, 500));
     }
     
-    console.log(`Found ${count} total bookings matching filters`);
+    // Process bookings matching filters
     
     // Build main query for fetching bookings
     let query = supabaseClient
@@ -119,7 +119,7 @@ const getAllBookings = async (req, res, next) => {
       return next(new AppError(`Database error: ${error.message}`, 500));
     }
     
-    console.log(`Successfully fetched ${bookings.length} bookings for page ${page}`);
+    // Successfully fetched bookings
     
     // Transform and clean data for frontend compatibility
     const bookingsResponse = bookings.map(booking => {
