@@ -20,26 +20,55 @@ const adminAuthRoutes = require('./routes/admin.auth.routes');
 const imageRoutes = require('./routes/image.routes');
 const cloudinaryRoutes = require('./routes/cloudinary.routes');
 
-// Initialize express app
+// Create Express app
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// Middleware
-app.use(helmet()); // Security headers
-app.use(morgan('dev')); // Logging
-// Configure CORS with more permissive options for development
-app.use(cors({
-  origin: process.env.CORS_ORIGIN ? 
-    [process.env.CORS_ORIGIN,'https://hotel-supabase.onrender.com', 'https://api.cloudinary.com'] : 
-    ['http://localhost:3000', 'http://127.0.0.1:3000', 'https://api.cloudinary.com'],
+// CORS must be configured BEFORE any other middleware
+const corsOptions = {
+  origin: function(origin, callback) {
+    console.log('Request from origin:', origin);
+    
+    // Allow requests with no origin (like mobile apps, curl, etc)
+    if(!origin) return callback(null, true);
+    
+    const allowedOrigins = [
+      'http://localhost:3000',
+      'http://127.0.0.1:3000',
+      'https://solace-hotel.netlify.app',
+      'https://api.cloudinary.com',
+      'https://hotel-supabase.onrender.com'
+    ];
+    
+    // Add CORS_ORIGIN to allowed origins if set
+    if (process.env.CORS_ORIGIN && !allowedOrigins.includes(process.env.CORS_ORIGIN)) {
+      allowedOrigins.push(process.env.CORS_ORIGIN);
+    }
+    
+    console.log('Allowed origins:', allowedOrigins);
+    
+    // Check if the origin is in our allowedOrigins
+    if(allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    } else {
+      console.log('CORS blocked origin:', origin);
+      return callback(new Error('Not allowed by CORS'), false);
+    }
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
   allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With', 'Origin']
-}));
+};
+
+// Apply CORS middleware FIRST
+app.use(cors(corsOptions));
 
 // Handle preflight requests
-app.options('*', cors());
+app.options('*', cors(corsOptions));
 
+// Other middleware
+app.use(helmet()); // Security headers
+app.use(morgan('dev')); // Logging
 app.use(express.json()); // Parse JSON bodies
 app.use(express.urlencoded({ extended: true })); // Parse URL-encoded bodies
 app.use(cookieParser()); // Parse cookies
