@@ -13,8 +13,8 @@ router.get('/', roomController.getAllRooms);
 // GET top rated rooms
 router.get('/top-rated', roomController.getTopRatedRooms);
 
-// GET room categories samples
-router.get('/categories/samples', roomController.getRoomCategories);
+// GET room categories samples (one from each category)
+router.get('/categories/samples', roomController.getCategorySamples);
 
 // GET all room categories
 router.get('/categories', roomController.getRoomCategories);

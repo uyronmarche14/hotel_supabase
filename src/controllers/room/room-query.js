@@ -100,11 +100,32 @@ const getTopRatedRooms = async (req, res, next) => {
 
     // Process room data to ensure proper URLs and formats
     const processedRooms = rooms.map(room => {
-      // Make sure imageUrl is properly formatted
-      if (room.imageUrl && room.imageUrl.startsWith('/images/')) {
-        room.imageUrl = `https://placehold.co/600x400/png?text=Room+${room.title}`;
-      }
-      return room;
+      // Transform room data to camelCase for frontend compatibility
+      return {
+        id: room.id,
+        title: room.title,
+        roomNumber: room.room_number,
+        type: room.type,
+        description: room.description,
+        fullDescription: room.full_description,
+        price: room.price,
+        capacity: room.capacity,
+        maxOccupancy: room.max_occupancy,
+        roomSize: room.room_size,
+        category: room.category,
+        location: room.location,
+        amenities: room.amenities || [],
+        additionalAmenities: room.additional_amenities || [],
+        features: room.features || [],
+        bedType: room.bed_type,
+        viewType: room.view_type,
+        isAvailable: room.is_available,
+        rating: room.rating || 4.5,
+        reviews: room.reviews || 0,
+        // Handle image URL properly
+        imageUrl: room.image_url || `https://placehold.co/600x400/png?text=Room+${room.title || 'Image'}`,
+        images: room.images || []
+      };
     });
 
     console.log(`Returning ${processedRooms.length} top rated rooms`);
@@ -126,18 +147,23 @@ const getTopRatedRooms = async (req, res, next) => {
  */
 const getRoomCategories = async (req, res, next) => {
   try {
-    // Get all rooms to extract categories
+    console.log('Fetching room categories');
+    
+    // Get all rooms with their categories and image URLs
     const { data: rooms, error } = await supabaseClient
       .from('rooms')
-      .select('category')
-      .not('category', 'is', null);
+      .select('id, category, image_url');
 
     if (error) {
+      console.error('Error fetching rooms for categories:', error);
       return next(new AppError(error.message, 500));
     }
 
-    // Extract unique categories
+    console.log(`Retrieved ${rooms.length} rooms for category processing`);
+    
+    // Extract unique categories and filter out any nulls or empty strings
     const categories = [...new Set(rooms.map(room => room.category))].filter(Boolean);
+    console.log(`Found ${categories.length} unique categories:`, categories);
     
     // Get rooms count by category
     const categoryCounts = {};
@@ -146,30 +172,30 @@ const getRoomCategories = async (req, res, next) => {
     });
 
     // Get sample images for each category
-    const categoryPromises = categories.map(async category => {
-      const { data: categoryRooms, error: categoryError } = await supabaseClient
-        .from('rooms')
-        .select('image_url')
-        .eq('category', category)
-        .limit(1);
-
-      if (categoryError || !categoryRooms || categoryRooms.length === 0) {
-        return {
-          name: category,
-          count: categoryCounts[category],
-          image: null
-        };
+    const categoryData = categories.map(category => {
+      // Find rooms in this category that have image URLs
+      const roomsInCategory = rooms.filter(room => 
+        room.category === category && room.image_url
+      );
+      
+      // Use the first available image or a placeholder
+      let imageUrl = null;
+      if (roomsInCategory.length > 0 && roomsInCategory[0].image_url) {
+        imageUrl = roomsInCategory[0].image_url;
+      } else {
+        // Provide a placeholder image using the category name
+        imageUrl = `https://placehold.co/600x400/png?text=${encodeURIComponent(category)}`;
       }
-
+      
       return {
         name: category,
         count: categoryCounts[category],
-        image: categoryRooms[0].image_url
+        image: imageUrl
       };
     });
 
-    const categoryData = await Promise.all(categoryPromises);
-
+    console.log(`Returning ${categoryData.length} categories with images`);
+    
     res.status(200).json({
       success: true,
       count: categories.length,
@@ -436,11 +462,95 @@ const getRoomById = async (req, res, next) => {
   }
 };
 
+/**
+ * Get room category samples - one room from each category
+ */
+const getCategorySamples = async (req, res, next) => {
+  try {
+    console.log('Fetching room category samples - one room from each category');
+    
+    // Get all distinct categories first
+    const { data: categoriesData, error: categoryError } = await supabaseClient
+      .from('rooms')
+      .select('category')
+      .not('category', 'is', null);
+      
+    if (categoryError) {
+      console.error('Error fetching categories:', categoryError);
+      return next(new AppError(categoryError.message, 500));
+    }
+    
+    // Extract unique categories
+    const categories = [...new Set(categoriesData.map(room => room.category))].filter(Boolean);
+    console.log(`Found ${categories.length} unique categories:`, categories);
+    
+    // For each category, find the highest rated room
+    const categoryRoomsPromises = categories.map(async (category) => {
+      const { data: roomsInCategory, error: roomsError } = await supabaseClient
+        .from('rooms')
+        .select('*')
+        .eq('category', category)
+        .order('rating', { ascending: false })
+        .limit(1);
+        
+      if (roomsError || !roomsInCategory || roomsInCategory.length === 0) {
+        console.error(`Error or no rooms found for category ${category}:`, roomsError);
+        return null;
+      }
+      
+      const room = roomsInCategory[0];
+      
+      // Transform to camelCase for frontend
+      return {
+        id: room.id,
+        title: room.title,
+        roomNumber: room.room_number,
+        type: room.type,
+        description: room.description,
+        fullDescription: room.full_description,
+        price: room.price,
+        capacity: room.capacity,
+        maxOccupancy: room.max_occupancy,
+        roomSize: room.room_size,
+        category: room.category,
+        location: room.location,
+        amenities: room.amenities || [],
+        additionalAmenities: room.additional_amenities || [],
+        features: room.features || [],
+        bedType: room.bed_type,
+        viewType: room.view_type,
+        isAvailable: room.is_available,
+        rating: room.rating || 4.5,
+        reviews: room.reviews || 0,
+        imageUrl: room.image_url || `https://placehold.co/600x400/png?text=${encodeURIComponent(room.category)}`,
+        images: room.images || [],
+        // Add href to link to category page - this is critical for proper navigation
+        href: `/services?category=${encodeURIComponent(room.category)}`
+      };
+    });
+    
+    // Wait for all promises to resolve
+    const categoryRooms = (await Promise.all(categoryRoomsPromises)).filter(Boolean);
+    
+    console.log(`Returning ${categoryRooms.length} rooms (one from each category)`);
+    
+    res.status(200).json({
+      success: true,
+      count: categoryRooms.length,
+      data: categoryRooms
+    });
+  } catch (error) {
+    console.error('Error in getCategorySamples:', error);
+    next(new AppError(error.message, 500));
+  }
+};
+
 module.exports = {
   getAllRooms,
   getTopRatedRooms,
   getRoomCategories,
   searchRooms,
   getRoomsByCategory,
-  getRoomById
+  getRoomById,
+  getCategorySamples
 };

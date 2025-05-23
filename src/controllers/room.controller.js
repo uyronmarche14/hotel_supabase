@@ -17,6 +17,7 @@ module.exports = {
   getAllRooms: roomQuery.getAllRooms,
   getTopRatedRooms: roomQuery.getTopRatedRooms,
   getRoomCategories: roomQuery.getRoomCategories,
+  getCategorySamples: roomQuery.getCategorySamples,
   searchRooms: roomQuery.searchRooms,
   getRoomsByCategory: roomQuery.getRoomsByCategory,
   getRoomById: roomQuery.getRoomById,
