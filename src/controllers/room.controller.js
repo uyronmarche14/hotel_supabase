@@ -2,14 +2,25 @@
  * Room Controller
  * Handles room-related operations
  * 
- * This is now a facade that redirects to the modular implementation
- * in the room/ directory for better maintainability.
+ * This controller directly imports individual module files to avoid
+ * dependency issues during deployment.
  */
 
-// Import the modular implementations directly from their source files
-const roomQuery = require('./room/room-query');
-const roomOperations = require('./room/room-operations');
-const imageManagement = require('./room/image-management');
+// IMPORTANT: Directly import specific module files to prevent 'MODULE_NOT_FOUND' errors in production
+// This is more reliable than using index.js which may cause issues in some deployment environments
+try {
+  var roomQuery = require('./room/room-query');
+  var roomOperations = require('./room/room-operations');
+  var imageManagement = require('./room/image-management');
+  
+  console.log('Successfully loaded room controller modules');
+} catch (error) {
+  console.error('Error loading room controller modules:', error.message);
+  // Provide fallbacks to prevent fatal crashes
+  roomQuery = roomQuery || {};
+  roomOperations = roomOperations || {};
+  imageManagement = imageManagement || {};
+}
 
 // Export all functions
 module.exports = {

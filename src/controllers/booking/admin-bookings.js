@@ -11,7 +11,7 @@ const AppError = require('../../utils/appError');
  */
 const getAllBookings = async (req, res, next) => {
   try {
-    console.log('Admin fetching all bookings');
+    // Admin fetching all bookings
     
     // Get pagination and filter parameters from query string with validation
     const page = Math.max(parseInt(req.query.page) || 1, 1); // Ensure minimum page is 1
@@ -26,8 +26,8 @@ const getAllBookings = async (req, res, next) => {
     const roomId = req.query.roomId || null;
     const searchTerm = req.query.search || null;
     
-    // Build query for count
-    let countQuery = supabaseClient.from('bookings').count();
+    // Build query for count - use select with count option instead of count()
+    let countQuery = supabaseClient.from('bookings').select('*', { count: 'exact', head: true });
     
     // Apply filters to count query if provided
     if (status) {
@@ -50,15 +50,15 @@ const getAllBookings = async (req, res, next) => {
       countQuery = countQuery.eq('room_id', roomId);
     }
     
-    // Execute count query
-    const { count, error: countError } = await countQuery;
+    // Execute count query - select with {count: 'exact', head: true} returns different structure than count()
+    const { data, count, error: countError } = await countQuery;
       
     if (countError) {
       console.error('Error counting bookings:', countError);
       return next(new AppError(`Database error: ${countError.message}`, 500));
     }
     
-    console.log(`Found ${count} total bookings matching filters`);
+    // Process bookings matching filters
     
     // Build main query for fetching bookings
     let query = supabaseClient
@@ -119,7 +119,7 @@ const getAllBookings = async (req, res, next) => {
       return next(new AppError(`Database error: ${error.message}`, 500));
     }
     
-    console.log(`Successfully fetched ${bookings.length} bookings for page ${page}`);
+    // Successfully fetched bookings
     
     // Transform and clean data for frontend compatibility
     const bookingsResponse = bookings.map(booking => {
