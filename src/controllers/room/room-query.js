@@ -55,6 +55,7 @@ const getAllRooms = async (req, res, next) => {
       images: room.images || [],
       amenities: room.amenities || [],
       featured: room.featured || false,
+      href: `/hotelRoomDetails/${encodeURIComponent(room.category)}/${room.id}`,
       createdAt: room.created_at,
       updatedAt: room.updated_at
     }));
@@ -290,6 +291,7 @@ const searchRooms = async (req, res, next) => {
       images: room.images || [],
       amenities: room.amenities || [],
       featured: room.featured || false,
+      href: `/hotelRoomDetails/${encodeURIComponent(room.category)}/${room.id}`,
       createdAt: room.created_at,
       updatedAt: room.updated_at
     }));
@@ -363,6 +365,7 @@ const getRoomsByCategory = async (req, res, next) => {
       images: room.images || [],
       amenities: room.amenities || [],
       featured: room.featured || false,
+      href: `/hotelRoomDetails/${encodeURIComponent(room.category)}/${room.id}`,
       createdAt: room.created_at,
       updatedAt: room.updated_at
     }));
@@ -447,6 +450,7 @@ const getRoomById = async (req, res, next) => {
       images: room.images || [],
       amenities: room.amenities || [],
       featured: room.featured || false,
+      href: `/hotelRoomDetails/${encodeURIComponent(room.category)}/${room.id}`,
       createdAt: room.created_at,
       updatedAt: room.updated_at,
       reviews: formattedReviews,
