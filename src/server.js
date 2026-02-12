@@ -25,6 +25,9 @@ const adminAuthRoutes = require('./routes/admin.auth.routes');
 const app = express();
 const PORT = process.env.PORT || 10000;
 
+// trust proxy is required for Vercel/proxies to handle rate limiting correctly
+app.set('trust proxy', 1);
+
 // Security Middleware
 app.use(helmet()); // Security headers
 app.use(hpp()); // Prevent HTTP Parameter Pollution
@@ -51,24 +54,29 @@ app.use(cors({
     // Allow requests with no origin (like mobile apps, curl, etc)
     if (!origin) return callback(null, true);
     
+    // Normalize origins by removing trailing slashes
+    const normalize = (url) => url.replace(/\/$/, "");
+    const normalizedOrigin = normalize(origin);
+    
     const allowedOrigins = [
       'http://localhost:3000',
       'http://localhost:3001',
       'http://localhost:3002',
       'http://localhost:3003',
-      'http://localhost:7000', // Frontend Development Port (CRITICAL FIX)
+      'http://localhost:7000',
       process.env.CORS_ORIGIN
-    ].filter(Boolean); // Remove undefined/null values
+    ].filter(Boolean).map(normalize);
     
-    if (allowedOrigins.indexOf(origin) !== -1) {
+    if (allowedOrigins.includes(normalizedOrigin)) {
       callback(null, true);
     } else {
+      console.error(`CORS blocked for origin: ${origin}`);
       callback(new Error('Not allowed by CORS'));
     }
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept']
 }));
 
 // Handle preflight requests
