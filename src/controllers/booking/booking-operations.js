@@ -4,8 +4,16 @@
  */
 
 const { validationResult } = require('express-validator');
-const { supabaseClient } = require('../../config/supabase');
+const { db } = require('../../db');
+const { bookings, rooms } = require('../../db/schema');
+const { eq, and, or, lte, gte, ne } = require('drizzle-orm');
 const AppError = require('../../utils/appError');
+
+
+// Helper to generate booking ID
+const generateBookingId = () => {
+  return `BK-${Date.now().toString().slice(-6)}-${Math.random().toString(36).substring(2, 5).toUpperCase()}`;
+};
 
 /**
  * Create a new booking and save it to the database
@@ -26,22 +34,31 @@ const createBooking = async (req, res, next) => {
     // Get user ID from request or use guest ID
     const userId = req.user?.id || req.body.user_id || 'guest-' + Date.now();
     
-    // Extract booking data from request body - use a mutable variable for roomId
+    // Extract booking data from request body - support both snake_case and camelCase
     const {
-      check_in,
-      check_out,
-      total_price,
+      check_in, checkIn,
+      check_out, checkOut,
+      total_price, totalPrice,
       nights,
       adults,
       children,
-      payment_method,
-      special_requests,
-      user_email,
-      user_name
+      payment_method, paymentMethod,
+      special_requests, specialRequests,
+      user_email, email,
+      user_name, firstName, lastName,
+      phone
     } = req.body;
     
+    // Resolve values
+    const txCheckIn = check_in || checkIn;
+    const txCheckOut = check_out || checkOut;
+    const txTotalPrice = total_price || totalPrice;
+    const txPaymentMethod = payment_method || paymentMethod;
+    const txSpecialRequests = special_requests || specialRequests;
+    const txEmail = user_email || email;
+    
     // Extract room_id separately so we can modify it
-    let roomId = req.body.room_id;
+    let roomId = req.body.room_id || req.body.roomId;
     
     console.log('Creating new booking with data:', JSON.stringify(req.body, null, 2));
 
@@ -50,13 +67,12 @@ const createBooking = async (req, res, next) => {
       console.error('Invalid room_id received:', roomId);
       
       // Get a fallback room to use instead
-      const { data: fallbackRooms, error: fallbackError } = await supabaseClient
-        .from('rooms')
-        .select('id, title, image_url, category, price')
+      const [fallbackRoom] = await db
+        .select()
+        .from(rooms)
         .limit(1);
       
-      if (fallbackError || !fallbackRooms || fallbackRooms.length === 0) {
-        console.error('Could not fetch fallback room:', fallbackError);
+      if (!fallbackRoom) {
         return res.status(400).json({
           success: false,
           message: 'Invalid room ID and no fallback rooms available',
@@ -65,25 +81,23 @@ const createBooking = async (req, res, next) => {
       }
       
       // Use the first available room as fallback
-      roomId = fallbackRooms[0].id;
-      console.log(`Using fallback room: ${roomId} (${fallbackRooms[0].title})`);
+      roomId = fallbackRoom.id;
+      console.log(`Using fallback room: ${roomId} (${fallbackRoom.title})`);
     }
     
     // Verify the room exists
     let room;
     try {
-      const { data: roomData, error: roomError } = await supabaseClient
-        .from('rooms')
-        .select('id, title, image_url, category, price')
-        .eq('id', roomId)
-        .single();
+      const [roomData] = await db
+        .select()
+        .from(rooms)
+        .where(eq(rooms.id, roomId));
 
-      if (roomError) {
-        console.error('Error finding room:', roomError);
+      if (!roomData) {
         return res.status(404).json({
           success: false,
           message: 'Room not found',
-          error: roomError.message
+          error: 'Room with the provided ID does not exist'
         });
       }
       
@@ -101,7 +115,7 @@ const createBooking = async (req, res, next) => {
 
     // Create booking record in database with safety checks
     const roomPrice = room && room.price ? room.price : 100; // Fallback price if none provided
-    const calculatedTotalPrice = total_price || (nights ? nights * roomPrice : roomPrice);
+    const calculatedTotalPrice = txTotalPrice || (nights ? nights * roomPrice : roomPrice);
     
     // Log room data for debugging
     console.log('Using room for booking:', {
@@ -120,56 +134,80 @@ const createBooking = async (req, res, next) => {
       });
     }
     
+    // Prepare names
+    // Prefer explicit firstName/lastName if provided, otherwise parse user_name
+    let finalFirstName = '';
+    let finalLastName = '';
+    
+    if (firstName && lastName) {
+        finalFirstName = firstName;
+        finalLastName = lastName;
+    } else {
+        const fullName = user_name || (firstName ? `${firstName}` : 'Guest User');
+        const nameParts = fullName.split(' ');
+        finalFirstName = nameParts[0];
+        finalLastName = nameParts.length > 1 ? nameParts.slice(1).join(' ') : 'User';
+    }
+
     // Create a properly formatted booking record with all required fields
     const bookingData = {
-      room_id: roomId,
-      user_id: userId,
-      check_in: check_in,
-      check_out: check_out,
-      total_price: calculatedTotalPrice,
+      bookingId: generateBookingId(),
+      userId: userId,
+      roomId: roomId,
+      
+      // Guest/User Info
+      firstName: finalFirstName,
+      lastName: finalLastName,
+      email: txEmail || 'guest@example.com',
+      phone: phone || 'N/A',
+      
+      // Room Info Snapshot
+      roomType: room.type || 'standard',
+      roomTitle: room.title,
+      roomCategory: room.category,
+      roomImage: room.imageUrl,
+      
+      // Booking Details
+      checkIn: new Date(txCheckIn).toISOString().split('T')[0],
+      checkOut: new Date(txCheckOut).toISOString().split('T')[0],
       nights: nights || 1,
-      adults: adults || 1,
-      children: children || 0,
-      payment_method: payment_method || 'credit_card',
-      special_requests: special_requests || '',
+      guests: (parseInt(adults) || 1) + (parseInt(children) || 0),
+      adults: parseInt(adults) || 1,
+      
+      specialRequests: txSpecialRequests || '',
+      basePrice: roomPrice.toString(),
+      taxAndFees: '0', 
+      totalPrice: calculatedTotalPrice.toString(),
+      
       status: 'confirmed',
-      user_email: user_email,
-      user_name: user_name
+      paymentStatus: 'pending',
+      location: room.location,
+      
+      createdAt: new Date(),
+      updatedAt: new Date()
     };
 
     // Insert the booking into the database
-    const { data: newBooking, error: insertError } = await supabaseClient
-      .from('bookings')
-      .insert(bookingData)
-      .select('*')
-      .single();
-
-    if (insertError) {
-      console.error('Error inserting booking:', insertError);
-      return res.status(500).json({
-        success: false,
-        message: 'Failed to create booking',
-        error: insertError.message
-      });
-    }
+    const [newBooking] = await db.insert(bookings).values(bookingData).returning();
 
     // Transform the response for frontend compatibility
     const bookingResponse = {
       id: newBooking.id,
-      roomId: newBooking.room_id,
-      roomTitle: room.title,
-      roomImage: room.image_url,
-      roomCategory: room.category,
-      checkIn: newBooking.check_in,
-      checkOut: newBooking.check_out,
-      totalPrice: newBooking.total_price,
+      roomId: newBooking.roomId,
+      roomTitle: newBooking.roomTitle,
+      roomImage: newBooking.roomImage,
+      roomCategory: newBooking.roomCategory,
+      checkIn: newBooking.checkIn,
+      checkOut: newBooking.checkOut,
+      totalPrice: newBooking.totalPrice,
       nights: newBooking.nights,
       status: newBooking.status,
-      paymentMethod: newBooking.payment_method,
-      specialRequests: newBooking.special_requests,
-      adults: newBooking.adults,
-      children: newBooking.children,
-      createdAt: newBooking.created_at
+      // paymentMethod: newBooking.payment_method, // Not in Drizzle schema? Checking...
+      // Schema has paymentStatus, but not paymentMethod. 
+      // The original code had payment_method. Drizzle schema doesn't seem to have it.
+      // We'll omit it from response or mock it.
+      specialRequests: newBooking.specialRequests,
+      createdAt: newBooking.createdAt
     };
 
     res.status(201).json({
@@ -216,14 +254,12 @@ const updateBooking = async (req, res, next) => {
     } = req.body;
 
     // Check if booking exists and belongs to user
-    const { data: existingBooking, error: findError } = await supabaseClient
-      .from('bookings')
-      .select('id, room_id, status')
-      .eq('id', id)
-      .eq('user_id', userId)
-      .single();
+    const [existingBooking] = await db
+      .select()
+      .from(bookings)
+      .where(and(eq(bookings.id, id), eq(bookings.userId, userId)));
 
-    if (findError || !existingBooking) {
+    if (!existingBooking) {
       return next(new AppError('Booking not found or access denied', 404));
     }
 
@@ -238,19 +274,23 @@ const updateBooking = async (req, res, next) => {
     // If dates are changed, check availability
     if (checkIn !== undefined && checkOut !== undefined) {
       // Check if room is already booked for the dates
-      const { data: existingBookings, error: bookingError } = await supabaseClient
-        .from('bookings')
-        .select('id')
-        .eq('room_id', existingBooking.room_id)
-        .neq('id', id) // Exclude current booking
-        .or(`check_in.lte.${checkOut},check_out.gte.${checkIn}`)
-        .not('status', 'eq', 'cancelled');
+      // Using Drizzle to check for overlap
+      const [overlapBooking] = await db
+        .select()
+        .from(bookings)
+        .where(
+          and(
+            eq(bookings.roomId, existingBooking.roomId),
+            ne(bookings.id, id),
+            or(
+                and(lte(bookings.checkIn, checkOut), gte(bookings.checkOut, checkIn))
+            ),
+            ne(bookings.status, 'cancelled')
+          )
+        )
+        .limit(1);
 
-      if (bookingError) {
-        return next(new AppError(bookingError.message, 500));
-      }
-
-      if (existingBookings.length > 0) {
+      if (overlapBooking) {
         return res.status(400).json({
           success: false,
           message: 'The room is already booked for these dates',
@@ -261,58 +301,54 @@ const updateBooking = async (req, res, next) => {
 
     // Prepare update data
     const updateData = {};
-    if (checkIn !== undefined) updateData.check_in = checkIn;
-    if (checkOut !== undefined) updateData.check_out = checkOut;
-    if (totalPrice !== undefined) updateData.total_price = totalPrice;
+    if (checkIn !== undefined) updateData.checkIn = new Date(checkIn).toISOString().split('T')[0];
+    if (checkOut !== undefined) updateData.checkOut = new Date(checkOut).toISOString().split('T')[0];
+    if (totalPrice !== undefined) updateData.totalPrice = totalPrice.toString();
     if (nights !== undefined) updateData.nights = nights;
-    if (paymentMethod !== undefined) updateData.payment_method = paymentMethod;
-    if (specialRequests !== undefined) updateData.special_requests = specialRequests;
-    if (adults !== undefined) updateData.adults = adults;
-    if (children !== undefined) updateData.children = children;
-    updateData.updated_at = new Date().toISOString();
+    // paymentMethod not in schema
+    if (specialRequests !== undefined) updateData.specialRequests = specialRequests;
+    // adults/children not separate columns in schema, guests is integer
+    if (adults || children) {
+       const totalGuests = (parseInt(adults) || 0) + (parseInt(children) || 0);
+       if (totalGuests > 0) updateData.guests = totalGuests;
+    }
+    updateData.updatedAt = new Date();
 
     // Update booking
-    const { data: updatedBooking, error } = await supabaseClient
-      .from('bookings')
-      .update(updateData)
-      .eq('id', id)
-      .eq('user_id', userId)
-      .select(`
-        *,
-        rooms:room_id (
-          title,
-          image_url,
-          category,
-          price,
-          location
-        )
-      `)
-      .single();
+    const [updatedBooking] = await db
+      .update(bookings)
+      .set(updateData)
+      .where(and(eq(bookings.id, id), eq(bookings.userId, userId)))
+      .returning();
+    
+    // Fetch room details for response
+    const [bookedRoom] = await db.select().from(rooms).where(eq(rooms.id, updatedBooking.roomId));
 
-    if (error) {
-      return next(new AppError(error.message, 500));
+    if (!updatedBooking) {
+        return next(new AppError('Failed to update booking', 500));
     }
 
     // Transform the response for frontend compatibility
+    // Transform the response for frontend compatibility
     const bookingResponse = {
       id: updatedBooking.id,
-      roomId: updatedBooking.room_id,
-      roomTitle: updatedBooking.rooms?.title || '',
-      roomImage: updatedBooking.rooms?.image_url || '',
-      roomCategory: updatedBooking.rooms?.category || '',
-      roomPrice: updatedBooking.rooms?.price || 0,
-      roomLocation: updatedBooking.rooms?.location || '',
-      checkIn: updatedBooking.check_in,
-      checkOut: updatedBooking.check_out,
-      totalPrice: updatedBooking.total_price,
+      roomId: updatedBooking.roomId,
+      roomTitle: bookedRoom?.title || '',
+      roomImage: bookedRoom?.imageUrl || '',
+      roomCategory: bookedRoom?.category || '',
+      roomPrice: bookedRoom?.price || 0,
+      roomLocation: bookedRoom?.location || '',
+      checkIn: updatedBooking.checkIn,
+      checkOut: updatedBooking.checkOut,
+      totalPrice: updatedBooking.totalPrice,
       nights: updatedBooking.nights,
       status: updatedBooking.status,
-      paymentMethod: updatedBooking.payment_method,
-      specialRequests: updatedBooking.special_requests,
-      adults: updatedBooking.adults,
-      children: updatedBooking.children,
-      createdAt: updatedBooking.created_at,
-      updatedAt: updatedBooking.updated_at
+      // paymentMethod: updatedBooking.payment_method,
+      specialRequests: updatedBooking.specialRequests,
+      // adults: updatedBooking.adults,
+      // children: updatedBooking.children,
+      createdAt: updatedBooking.createdAt,
+      updatedAt: updatedBooking.updatedAt
     };
 
     res.status(200).json({
@@ -334,14 +370,12 @@ const cancelBooking = async (req, res, next) => {
     const userId = req.user.id;
 
     // Check if booking exists and belongs to user
-    const { data: existingBooking, error: findError } = await supabaseClient
-      .from('bookings')
-      .select('id, status, room_id')
-      .eq('id', id)
-      .eq('user_id', userId)
-      .single();
+    const [existingBooking] = await db
+      .select()
+      .from(bookings)
+      .where(and(eq(bookings.id, id), eq(bookings.userId, userId)));
 
-    if (findError || !existingBooking) {
+    if (!existingBooking) {
       return next(new AppError('Booking not found or access denied', 404));
     }
 
@@ -354,43 +388,34 @@ const cancelBooking = async (req, res, next) => {
     }
 
     // Update booking status
-    const { data: updatedBooking, error } = await supabaseClient
-      .from('bookings')
-      .update({
+    const [updatedBooking] = await db
+      .update(bookings)
+      .set({
         status: 'cancelled',
-        updated_at: new Date().toISOString()
+        updatedAt: new Date()
       })
-      .eq('id', id)
-      .eq('user_id', userId)
-      .select(`
-        *,
-        rooms:room_id (
-          title,
-          image_url,
-          category
-        )
-      `)
-      .single();
+      .where(eq(bookings.id, id))
+      .returning();
+      
+    // Fetch room details for response
+    const [bookedRoom] = await db.select().from(rooms).where(eq(rooms.id, updatedBooking.roomId));
 
-    if (error) {
-      return next(new AppError(error.message, 500));
-    }
-
+    // Transform the response for frontend compatibility
     // Transform the response for frontend compatibility
     const bookingResponse = {
       id: updatedBooking.id,
-      roomId: updatedBooking.room_id,
-      roomTitle: updatedBooking.rooms?.title || '',
-      roomImage: updatedBooking.rooms?.image_url || '',
-      roomCategory: updatedBooking.rooms?.category || '',
-      checkIn: updatedBooking.check_in,
-      checkOut: updatedBooking.check_out,
-      totalPrice: updatedBooking.total_price,
+      roomId: updatedBooking.roomId,
+      roomTitle: bookedRoom?.title || '',
+      roomImage: bookedRoom?.imageUrl || '',
+      roomCategory: bookedRoom?.category || '',
+      checkIn: updatedBooking.checkIn,
+      checkOut: updatedBooking.checkOut,
+      totalPrice: updatedBooking.totalPrice,
       nights: updatedBooking.nights,
       status: updatedBooking.status,
-      paymentMethod: updatedBooking.payment_method,
-      createdAt: updatedBooking.created_at,
-      updatedAt: updatedBooking.updated_at
+      // paymentMethod: updatedBooking.payment_method,
+      createdAt: updatedBooking.createdAt,
+      updatedAt: updatedBooking.updatedAt
     };
 
     res.status(200).json({

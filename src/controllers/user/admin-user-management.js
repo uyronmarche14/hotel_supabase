@@ -3,7 +3,9 @@
  * Handles admin operations for user management
  */
 
-const { supabaseClient } = require('../../config/supabase');
+const { db } = require('../../db');
+const { users } = require('../../db/schema');
+const { eq, ne, and } = require('drizzle-orm');
 const AppError = require('../../utils/appError');
 
 /**
@@ -11,27 +13,30 @@ const AppError = require('../../utils/appError');
  */
 const getAllUsers = async (req, res, next) => {
   try {
-    const { data: users, error } = await supabaseClient
-      .from('users')
-      .select('id, name, email, role, profile_pic, created_at');
-
-    if (error) {
-      return next(new AppError(error.message, 500));
-    }
+    const usersData = await db
+      .select({
+        id: users.id,
+        name: users.name,
+        email: users.email,
+        role: users.role,
+        profilePic: users.profilePic,
+        createdAt: users.createdAt
+      })
+      .from(users);
 
     // Transform data for frontend compatibility
-    const usersResponse = users.map(user => ({
+    const usersResponse = usersData.map(user => ({
       id: user.id,
       name: user.name,
       email: user.email,
       role: user.role,
-      profilePic: user.profile_pic,
-      createdAt: user.created_at
+      profilePic: user.profilePic,
+      createdAt: user.createdAt
     }));
 
     res.status(200).json({
       success: true,
-      count: users.length,
+      count: usersData.length,
       users: usersResponse
     });
   } catch (error) {
@@ -46,13 +51,19 @@ const getUserById = async (req, res, next) => {
   try {
     const { id } = req.params;
 
-    const { data: user, error } = await supabaseClient
-      .from('users')
-      .select('id, name, email, role, profile_pic, created_at')
-      .eq('id', id)
-      .single();
+    const [user] = await db
+      .select({
+        id: users.id,
+        name: users.name,
+        email: users.email,
+        role: users.role,
+        profilePic: users.profilePic,
+        createdAt: users.createdAt
+      })
+      .from(users)
+      .where(eq(users.id, id));
 
-    if (error || !user) {
+    if (!user) {
       return next(new AppError('User not found', 404));
     }
 
@@ -62,8 +73,8 @@ const getUserById = async (req, res, next) => {
       name: user.name,
       email: user.email,
       role: user.role,
-      profilePic: user.profile_pic,
-      createdAt: user.created_at
+      profilePic: user.profilePic,
+      createdAt: user.createdAt
     };
 
     res.status(200).json({
@@ -84,24 +95,18 @@ const updateUser = async (req, res, next) => {
     const { name, email, role, profilePic } = req.body;
 
     // Check if user exists
-    const { data: existingUser, error: findError } = await supabaseClient
-      .from('users')
-      .select('id')
-      .eq('id', id)
-      .single();
+    const [existingUser] = await db.select().from(users).where(eq(users.id, id));
 
-    if (findError || !existingUser) {
+    if (!existingUser) {
       return next(new AppError('User not found', 404));
     }
 
     // If email is being updated, check if it's already in use
     if (email) {
-      const { data: duplicateEmail } = await supabaseClient
-        .from('users')
-        .select('id')
-        .eq('email', email)
-        .neq('id', id)
-        .single();
+      const [duplicateEmail] = await db
+        .select()
+        .from(users)
+        .where(and(eq(users.email, email), ne(users.id, id)));
 
       if (duplicateEmail) {
         return res.status(400).json({
@@ -111,23 +116,20 @@ const updateUser = async (req, res, next) => {
       }
     }
 
-    // Update user
-    const { data: updatedUser, error } = await supabaseClient
-      .from('users')
-      .update({
-        name,
-        email,
-        role,
-        profile_pic: profilePic,
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', id)
-      .select('id, name, email, role, profile_pic, created_at, updated_at')
-      .single();
+    // Prepare update data
+    const updateData = {};
+    if (name !== undefined) updateData.name = name;
+    if (email !== undefined) updateData.email = email;
+    if (role !== undefined) updateData.role = role;
+    if (profilePic !== undefined) updateData.profilePic = profilePic;
+    updateData.updatedAt = new Date();
 
-    if (error) {
-      return next(new AppError(error.message, 500));
-    }
+    // Update user
+    const [updatedUser] = await db
+      .update(users)
+      .set(updateData)
+      .where(eq(users.id, id))
+      .returning();
 
     // Transform response for frontend compatibility
     const userResponse = {
@@ -135,9 +137,9 @@ const updateUser = async (req, res, next) => {
       name: updatedUser.name,
       email: updatedUser.email,
       role: updatedUser.role,
-      profilePic: updatedUser.profile_pic,
-      createdAt: updatedUser.created_at,
-      updatedAt: updatedUser.updated_at
+      profilePic: updatedUser.profilePic,
+      createdAt: updatedUser.createdAt,
+      updatedAt: updatedUser.updatedAt
     };
 
     res.status(200).json({
@@ -158,13 +160,9 @@ const deleteUser = async (req, res, next) => {
     const { id } = req.params;
 
     // Check if user exists
-    const { data: existingUser, error: findError } = await supabaseClient
-      .from('users')
-      .select('id, role')
-      .eq('id', id)
-      .single();
+    const [existingUser] = await db.select().from(users).where(eq(users.id, id));
 
-    if (findError || !existingUser) {
+    if (!existingUser) {
       return next(new AppError('User not found', 404));
     }
 
@@ -177,14 +175,9 @@ const deleteUser = async (req, res, next) => {
     }
 
     // Delete user
-    const { error } = await supabaseClient
-      .from('users')
-      .delete()
-      .eq('id', id);
+    await db.delete(users).where(eq(users.id, id));
 
-    if (error) {
-      return next(new AppError(error.message, 500));
-    }
+
 
     res.status(200).json({
       success: true,

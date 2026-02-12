@@ -3,7 +3,9 @@
  * Handles user-specific booking operations
  */
 
-const { supabaseClient } = require('../../config/supabase');
+const { db } = require('../../db');
+const { bookings, rooms } = require('../../db/schema');
+const { eq, desc, and } = require('drizzle-orm');
 const AppError = require('../../utils/appError');
 
 /**
@@ -13,49 +15,40 @@ const getUserBookings = async (req, res, next) => {
   try {
     const userId = req.user.id;
 
-    const { data: bookings, error } = await supabaseClient
-      .from('bookings')
-      .select(`
-        *,
-        rooms:room_id (
-          title,
-          image_url,
-          category,
-          price,
-          location
-        )
-      `)
-      .eq('user_id', userId)
-      .order('created_at', { ascending: false });
-
-    if (error) {
-      return next(new AppError(error.message, 500));
-    }
+    const bookingsData = await db
+      .select({
+        booking: bookings,
+        room: rooms
+      })
+      .from(bookings)
+      .leftJoin(rooms, eq(bookings.roomId, rooms.id))
+      .where(eq(bookings.userId, userId))
+      .orderBy(desc(bookings.createdAt));
 
     // Transform data for frontend compatibility
-    const bookingsResponse = bookings.map(booking => ({
+    const bookingsResponse = bookingsData.map(({ booking, room }) => ({
       id: booking.id,
-      roomId: booking.room_id,
-      roomTitle: booking.rooms?.title || '',
-      roomImage: booking.rooms?.image_url || '',
-      roomCategory: booking.rooms?.category || '',
-      roomPrice: booking.rooms?.price || 0,
-      roomLocation: booking.rooms?.location || '',
-      checkIn: booking.check_in,
-      checkOut: booking.check_out,
-      totalPrice: booking.total_price,
+      roomId: booking.roomId,
+      roomTitle: room?.title || booking.roomTitle || '',
+      roomImage: room?.imageUrl || booking.roomImage || '',
+      roomCategory: room?.category || booking.roomCategory || '',
+      roomPrice: room?.price ? parseFloat(room.price) : 0,
+      roomLocation: room?.location || booking.location || '',
+      checkIn: booking.checkIn,
+      checkOut: booking.checkOut,
+      totalPrice: parseFloat(booking.totalPrice) || 0,
       nights: booking.nights,
       status: booking.status,
-      paymentMethod: booking.payment_method,
-      specialRequests: booking.special_requests,
-      adults: booking.adults,
-      children: booking.children,
-      createdAt: booking.created_at
+      // paymentMethod: booking.paymentMethod, // Not in Drizzle schema
+      specialRequests: booking.specialRequests,
+      adults: booking.adults || 1, // Defaulting if null
+      children: 0, // Schema doesn't have children column, explicitly 0
+      createdAt: booking.createdAt
     }));
 
     res.status(200).json({
       success: true,
-      count: bookings.length,
+      count: bookingsData.length,
       bookings: bookingsResponse
     });
   } catch (error) {
@@ -71,53 +64,47 @@ const getBookingById = async (req, res, next) => {
     const { id } = req.params;
     const userId = req.user.id;
 
-    // Users can only view their own bookings unless they are admins
-    let query = supabaseClient
-      .from('bookings')
-      .select(`
-        *,
-        rooms:room_id (
-          title,
-          image_url,
-          category,
-          price,
-          location,
-          amenities
-        )
-      `)
-      .eq('id', id);
-
-    // If not admin, restrict to user's own bookings
+    // Build query conditions
+    let conditions = eq(bookings.id, id);
     if (req.user.role !== 'admin') {
-      query = query.eq('user_id', userId);
+      conditions = and(conditions, eq(bookings.userId, userId));
     }
 
-    const { data: booking, error } = await query.single();
+    const [result] = await db
+      .select({
+        booking: bookings,
+        room: rooms
+      })
+      .from(bookings)
+      .leftJoin(rooms, eq(bookings.roomId, rooms.id))
+      .where(conditions);
 
-    if (error || !booking) {
+    if (!result) {
       return next(new AppError('Booking not found or access denied', 404));
     }
+
+    const { booking, room } = result;
 
     // Transform data for frontend compatibility
     const bookingResponse = {
       id: booking.id,
-      roomId: booking.room_id,
-      roomTitle: booking.rooms?.title || '',
-      roomImage: booking.rooms?.image_url || '',
-      roomCategory: booking.rooms?.category || '',
-      roomPrice: booking.rooms?.price || 0,
-      roomLocation: booking.rooms?.location || '',
-      roomAmenities: booking.rooms?.amenities || [],
-      checkIn: booking.check_in,
-      checkOut: booking.check_out,
-      totalPrice: booking.total_price,
+      roomId: booking.roomId,
+      roomTitle: room?.title || booking.roomTitle || '',
+      roomImage: room?.imageUrl || booking.roomImage || '',
+      roomCategory: room?.category || booking.roomCategory || '',
+      roomPrice: room?.price ? parseFloat(room.price) : 0,
+      roomLocation: room?.location || booking.location || '',
+      roomAmenities: room?.amenities || [],
+      checkIn: booking.checkIn,
+      checkOut: booking.checkOut,
+      totalPrice: parseFloat(booking.totalPrice) || 0,
       nights: booking.nights,
       status: booking.status,
-      paymentMethod: booking.payment_method,
-      specialRequests: booking.special_requests,
-      adults: booking.adults,
-      children: booking.children,
-      createdAt: booking.created_at
+      // paymentMethod: booking.paymentMethod,
+      specialRequests: booking.specialRequests,
+      adults: booking.adults || 1,
+      children: 0,
+      createdAt: booking.createdAt
     };
 
     res.status(200).json({

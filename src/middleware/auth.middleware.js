@@ -1,6 +1,8 @@
 const jwt = require('jsonwebtoken');
 const { verifyToken, refreshAccessToken } = require('../utils/jwt');
-const { supabaseClient } = require('../config/supabase');
+const { db } = require('../db');
+const { users } = require('../db/schema');
+const { eq } = require('drizzle-orm');
 const AppError = require('../utils/appError');
 const { getEnv } = require('../utils/env-validator');
 
@@ -38,24 +40,23 @@ exports.verifyToken = async (req, res, next) => {
     }
 
     // Check if user exists
-    const { data: user, error } = await supabaseClient
-      .from('users')
-      .select('id, name, email, role, profile_pic')
-      .eq('id', decoded.id)
-      .single();
+    const [user] = await db
+      .select({
+        id: users.id,
+        name: users.name,
+        email: users.email,
+        role: users.role,
+        profilePic: users.profilePic
+      })
+      .from(users)
+      .where(eq(users.id, decoded.id));
 
-    if (error || !user) {
+    if (!user) {
       return next(new AppError('User not found', 401));
     }
 
     // Add user to request object
-    req.user = {
-      id: user.id,
-      name: user.name,
-      email: user.email,
-      role: user.role,
-      profilePic: user.profile_pic
-    };
+    req.user = user;
 
     next();
   } catch (error) {

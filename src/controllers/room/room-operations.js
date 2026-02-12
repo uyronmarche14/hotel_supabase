@@ -1,9 +1,12 @@
-/**
+  /**
  * Room Operations Controller
  * Handles create, update, and delete operations for rooms
  */
 
 const { supabaseClient } = require('../../config/supabase');
+const { db } = require('../../db');
+const { rooms } = require('../../db/schema');
+const { eq } = require('drizzle-orm');
 const AppError = require('../../utils/appError');
 
 /**
@@ -29,31 +32,23 @@ const createRoom = async (req, res, next) => {
     const parsedAmenities = parseArrayField(amenities);
 
     // Create room
-    const { data: newRoom, error } = await supabaseClient
-      .from('rooms')
-      .insert([
-        {
-          title,
-          description,
-          price: parseFloat(price),
-          discount: discount ? parseFloat(discount) : 0,
-          capacity: parseInt(capacity),
-          size: parseInt(size),
-          category,
-          location,
-          amenities: parsedAmenities,
-          featured: featured === 'true' || featured === true,
-          image_url,
-          images: [],
-          created_at: new Date().toISOString()
-        }
-      ])
-      .select('*')
-      .single();
+    const [newRoom] = await db.insert(rooms).values({
+      title,
+      description,
+      price: parseFloat(price),
+      discount: discount ? parseFloat(discount) : 0,
+      capacity: parseInt(capacity),
+      roomSize: size ? `${size} sq m` : undefined, // Mapping size to roomSize text field based on schema
+      category,
+      location,
+      amenities: parsedAmenities,
+      featured: featured === 'true' || featured === true,
+      imageUrl: image_url,
+      images: [],
+      createdAt: new Date(), // Drizzle handles Date objects for timestamp
+    }).returning();
 
-    if (error) {
-      return next(new AppError(error.message, 500));
-    }
+
 
     // Transform response for frontend compatibility
     const roomResponse = {
@@ -63,14 +58,14 @@ const createRoom = async (req, res, next) => {
       price: newRoom.price,
       discount: newRoom.discount || 0,
       capacity: newRoom.capacity,
-      size: newRoom.size,
+      size: parseInt(newRoom.roomSize) || 0, // Converting back if needed, though schema says text
       category: newRoom.category,
       location: newRoom.location,
       amenities: newRoom.amenities || [],
       featured: newRoom.featured || false,
-      imageUrl: newRoom.image_url,
+      imageUrl: newRoom.imageUrl,
       images: newRoom.images || [],
-      createdAt: newRoom.created_at
+      createdAt: newRoom.createdAt
     };
 
     res.status(201).json({
@@ -128,13 +123,9 @@ const updateRoom = async (req, res, next) => {
     } = req.body;
 
     // Check if room exists
-    const { data: room, error: findError } = await supabaseClient
-      .from('rooms')
-      .select('id')
-      .eq('id', id)
-      .single();
+    const [room] = await db.select().from(rooms).where(eq(rooms.id, id));
 
-    if (findError || !room) {
+    if (!room) {
       return next(new AppError('Room not found', 404));
     }
 
@@ -148,25 +139,20 @@ const updateRoom = async (req, res, next) => {
     if (price !== undefined) updateData.price = parseFloat(price);
     if (discount !== undefined) updateData.discount = parseFloat(discount);
     if (capacity !== undefined) updateData.capacity = parseInt(capacity);
-    if (size !== undefined) updateData.size = parseInt(size);
+    if (size !== undefined) updateData.roomSize = `${size} sq m`; // Mapping size to roomSize
     if (category !== undefined) updateData.category = category;
     if (location !== undefined) updateData.location = location;
     if (amenities !== undefined) updateData.amenities = parsedAmenities;
     if (featured !== undefined) updateData.featured = featured === 'true' || featured === true;
-    if (image_url !== undefined) updateData.image_url = image_url;
-    updateData.updated_at = new Date().toISOString();
+    if (image_url !== undefined) updateData.imageUrl = image_url;
+    updateData.updatedAt = new Date();
 
     // Update room
-    const { data: updatedRoom, error } = await supabaseClient
-      .from('rooms')
-      .update(updateData)
-      .eq('id', id)
-      .select('*')
-      .single();
-
-    if (error) {
-      return next(new AppError(error.message, 500));
-    }
+    const [updatedRoom] = await db
+      .update(rooms)
+      .set(updateData)
+      .where(eq(rooms.id, id))
+      .returning();
 
     // Transform response for frontend compatibility
     const roomResponse = {
@@ -176,15 +162,15 @@ const updateRoom = async (req, res, next) => {
       price: updatedRoom.price,
       discount: updatedRoom.discount || 0,
       capacity: updatedRoom.capacity,
-      size: updatedRoom.size,
+      size: parseInt(updatedRoom.roomSize) || 0,
       category: updatedRoom.category,
       location: updatedRoom.location,
       amenities: updatedRoom.amenities || [],
       featured: updatedRoom.featured || false,
-      imageUrl: updatedRoom.image_url,
+      imageUrl: updatedRoom.imageUrl,
       images: updatedRoom.images || [],
-      createdAt: updatedRoom.created_at,
-      updatedAt: updatedRoom.updated_at
+      createdAt: updatedRoom.createdAt,
+      updatedAt: updatedRoom.updatedAt
     };
 
     res.status(200).json({
@@ -204,26 +190,15 @@ const deleteRoom = async (req, res, next) => {
   try {
     const { id } = req.params;
     
-    // Check if room exists and get images for deletion
-    const { data: room, error: findError } = await supabaseClient
-      .from('rooms')
-      .select('id, image_url, images')
-      .eq('id', id)
-      .single();
+    // Check if room exists
+    const [room] = await db.select().from(rooms).where(eq(rooms.id, id));
     
-    if (findError || !room) {
+    if (!room) {
       return next(new AppError('Room not found', 404));
     }
     
     // Delete room
-    const { error } = await supabaseClient
-      .from('rooms')
-      .delete()
-      .eq('id', id);
-    
-    if (error) {
-      return next(new AppError(error.message, 500));
-    }
+    await db.delete(rooms).where(eq(rooms.id, id));
     
     res.status(200).json({
       success: true,
@@ -246,10 +221,130 @@ const checkRoomAvailability = async (req, res, next) => {
   }
 };
 
+/**
+ * Upload room image
+ */
+const uploadRoomImage = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    
+    if (!req.file) {
+      return next(new AppError('Please upload an image', 400));
+    }
+    
+    const file = req.file;
+    const fileExt = file.originalname.split('.').pop();
+    const fileName = `${id}/${Date.now()}.${fileExt}`;
+    const filePath = `${fileName}`;
+    
+    // Upload to Supabase Storage
+    const { data: uploadData, error: uploadError } = await supabaseClient.storage
+      .from('rooms')
+      .upload(filePath, file.buffer, {
+        contentType: file.mimetype,
+        upsert: true
+      });
+      
+    if (uploadError) {
+      console.error('Upload Error:', uploadError);
+      return next(new AppError('Error uploading image: ' + uploadError.message, 500));
+    }
+    
+    // Get public URL
+    const { data: { publicUrl } } = supabaseClient.storage
+      .from('rooms')
+      .getPublicUrl(filePath);
+      
+    // Update room with new image URL
+    const [room] = await db
+      .update(rooms)
+      .set({ imageUrl: publicUrl })
+      .where(eq(rooms.id, id))
+      .returning();
+    
+    res.status(200).json({
+      success: true,
+      message: 'Image uploaded successfully',
+      imageUrl: publicUrl,
+      room
+    });
+  } catch (error) {
+    next(new AppError(error.message, 500));
+  }
+};
+
+/**
+ * Upload multiple room images
+ */
+const uploadRoomImages = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    
+    if (!req.files || req.files.length === 0) {
+      return next(new AppError('Please upload images', 400));
+    }
+    
+    const uploadedUrls = [];
+    
+    // Upload each file
+    for (const file of req.files) {
+      const fileExt = file.originalname.split('.').pop();
+      const fileName = `${id}/${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
+      const filePath = `${fileName}`;
+      
+      const { data: uploadData, error: uploadError } = await supabaseClient.storage
+        .from('rooms')
+        .upload(filePath, file.buffer, {
+          contentType: file.mimetype,
+          upsert: true
+        });
+        
+      if (!uploadError) {
+        const { data: { publicUrl } } = supabaseClient.storage
+          .from('rooms')
+          .getPublicUrl(filePath);
+          
+        uploadedUrls.push(publicUrl);
+      }
+    }
+    
+    if (uploadedUrls.length === 0) {
+      return next(new AppError('Failed to upload any images', 500));
+    }
+    
+    // Get current images
+    const [currentRoom] = await db
+      .select({ images: rooms.images })
+      .from(rooms)
+      .where(eq(rooms.id, id));
+      
+    const currentImages = currentRoom?.images || [];
+    const newImages = [...currentImages, ...uploadedUrls];
+    
+    // Update room
+    const [room] = await db
+      .update(rooms)
+      .set({ images: newImages })
+      .where(eq(rooms.id, id))
+      .returning();
+    
+    res.status(200).json({
+      success: true,
+      message: 'Images uploaded successfully',
+      imageUrls: uploadedUrls,
+      room
+    });
+  } catch (error) {
+    next(new AppError(error.message, 500));
+  }
+};
+
 module.exports = {
   createRoom,
   updateRoom,
   deleteRoom,
+  uploadRoomImage,
+  uploadRoomImages,
   parseArrayField,
   checkRoomAvailability
 };

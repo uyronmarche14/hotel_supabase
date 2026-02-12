@@ -3,7 +3,9 @@
  * Handles room availability checking
  */
 
-const { supabaseClient } = require('../../config/supabase');
+const { db } = require('../../db');
+const { rooms, bookings } = require('../../db/schema');
+const { eq, and, or, lte, gte, ne } = require('drizzle-orm');
 const AppError = require('../../utils/appError');
 
 /**
@@ -21,17 +23,16 @@ const checkRoomAvailability = async (req, res, next) => {
     }
 
     // Check if room exists
-    const { data: room, error: roomError } = await supabaseClient
-      .from('rooms')
-      .select('id, is_available')
-      .eq('id', roomId)
-      .single();
+    const [room] = await db
+      .select({ id: rooms.id, isAvailable: rooms.isAvailable })
+      .from(rooms)
+      .where(eq(rooms.id, roomId));
 
-    if (roomError || !room) {
+    if (!room) {
       return next(new AppError('Room not found', 404));
     }
 
-    if (room.is_available === false) {
+    if (room.isAvailable === false) {
       return res.status(200).json({
         success: true,
         available: false,
@@ -40,18 +41,20 @@ const checkRoomAvailability = async (req, res, next) => {
     }
 
     // Check if room is already booked for the dates
-    const { data: existingBookings, error: bookingError } = await supabaseClient
-      .from('bookings')
-      .select('id')
-      .eq('room_id', roomId)
-      .or(`check_in.lte.${checkOut},check_out.gte.${checkIn}`)
-      .not('status', 'eq', 'cancelled');
+    const overlaps = await db
+      .select({ id: bookings.id })
+      .from(bookings)
+      .where(
+        and(
+          eq(bookings.roomId, roomId),
+          or(
+            and(lte(bookings.checkIn, checkOut), gte(bookings.checkOut, checkIn))
+          ),
+          ne(bookings.status, 'cancelled')
+        )
+      );
 
-    if (bookingError) {
-      return next(new AppError(bookingError.message, 500));
-    }
-
-    const isAvailable = existingBookings.length === 0;
+    const isAvailable = overlaps.length === 0;
 
     res.status(200).json({
       success: true,

@@ -3,7 +3,9 @@
  * Handles administrative operations on bookings
  */
 
-const { supabaseClient } = require('../../config/supabase');
+const { db } = require('../../db');
+const { bookings, rooms, users } = require('../../db/schema');
+const { count, desc, eq, and, or, ilike, gte, lte } = require('drizzle-orm');
 const AppError = require('../../utils/appError');
 
 /**
@@ -26,121 +28,92 @@ const getAllBookings = async (req, res, next) => {
     const roomId = req.query.roomId || null;
     const searchTerm = req.query.search || null;
     
-    // Build query for count
-    let countQuery = supabaseClient.from('bookings').count();
+    // Build filters
+    const filters = [];
     
-    // Apply filters to count query if provided
     if (status) {
-      countQuery = countQuery.eq('status', status);
+      filters.push(eq(bookings.status, status));
     }
     
     if (fromDate) {
-      countQuery = countQuery.gte('check_in', fromDate);
+      filters.push(gte(bookings.checkIn, new Date(fromDate)));
     }
     
     if (toDate) {
-      countQuery = countQuery.lte('check_out', toDate);
+      filters.push(lte(bookings.checkOut, new Date(toDate)));
     }
     
     if (userId) {
-      countQuery = countQuery.eq('user_id', userId);
+      filters.push(eq(bookings.userId, userId));
     }
     
     if (roomId) {
-      countQuery = countQuery.eq('room_id', roomId);
+      filters.push(eq(bookings.roomId, roomId));
     }
     
-    // Execute count query
-    const { count, error: countError } = await countQuery;
-      
-    if (countError) {
-      console.error('Error counting bookings:', countError);
-      return next(new AppError(`Database error: ${countError.message}`, 500));
-    }
-    
-    console.log(`Found ${count} total bookings matching filters`);
-    
-    // Build main query for fetching bookings
-    let query = supabaseClient
-      .from('bookings')
-      .select(`
-        *,
-        rooms:room_id (
-          id,
-          title,
-          image_url,
-          category,
-          price,
-          location
-        ),
-        users:user_id (
-          id,
-          name,
-          email,
-          profile_pic
-        )
-      `);
-    
-    // Apply the same filters to the main query
-    if (status) {
-      query = query.eq('status', status);
-    }
-    
-    if (fromDate) {
-      query = query.gte('check_in', fromDate);
-    }
-    
-    if (toDate) {
-      query = query.lte('check_out', toDate);
-    }
-    
-    if (userId) {
-      query = query.eq('user_id', userId);
-    }
-    
-    if (roomId) {
-      query = query.eq('room_id', roomId);
-    }
-    
-    // Add search if provided - match on booking_id or user name/email via users table
     if (searchTerm) {
-      query = query.or(`booking_id.ilike.%${searchTerm}%,user_name.ilike.%${searchTerm}%,user_email.ilike.%${searchTerm}%`);
+      filters.push(or(
+        ilike(bookings.bookingId, `%${searchTerm}%`),
+        ilike(bookings.firstName, `%${searchTerm}%`),
+        ilike(bookings.lastName, `%${searchTerm}%`),
+        ilike(bookings.email, `%${searchTerm}%`)
+      ));
     }
     
-    // Add sorting and pagination
-    query = query.order('created_at', { ascending: false })
-      .range(startIndex, startIndex + limit - 1);
-    
-    // Execute the main query
-    const { data: bookings, error } = await query;
+    const whereClause = filters.length > 0 ? and(...filters) : undefined;
 
-    if (error) {
-      console.error('Error fetching bookings:', error);
-      return next(new AppError(`Database error: ${error.message}`, 500));
-    }
+    // Count total bookings
+    const [countResult] = await db
+      .select({ count: count() })
+      .from(bookings)
+      .leftJoin(users, eq(bookings.userId, users.id)) // Join needed if we filter by user fields? 
+      // Actually my search filter uses bookings fields (firstName, lastName copied to booking).
+      // But if search matches user table fields not in booking (like profilePic?), we might need join.
+      // Current search logic in original code: user_name, user_email.
+      // Drizzle schema has firstName, lastName, email in bookings table.
+      // So simple query on bookings table is enough for search.
+      .where(whereClause);
+      
+    const totalCount = countResult?.count || 0;
     
-    console.log(`Successfully fetched ${bookings.length} bookings for page ${page}`);
+    console.log(`Found ${totalCount} total bookings matching filters`);
+    
+    // Fetch bookings with relations
+    const bookingsData = await db
+      .select({
+        booking: bookings,
+        room: rooms,
+        user: users
+      })
+      .from(bookings)
+      .leftJoin(rooms, eq(bookings.roomId, rooms.id))
+      .leftJoin(users, eq(bookings.userId, users.id))
+      .where(whereClause)
+      .orderBy(desc(bookings.createdAt))
+      .limit(limit)
+      .offset(startIndex);
+
+    console.log(`Successfully fetched ${bookingsData.length} bookings for page ${page}`);
     
     // Transform and clean data for frontend compatibility
-    const bookingsResponse = bookings.map(booking => {
+    const bookingsResponse = bookingsData.map(({ booking, room, user }) => {
       // Format dates consistently - YYYY-MM-DD
-      const formatDate = (dateString) => {
-        if (!dateString) return '';
+      const formatDate = (date) => {
+        if (!date) return '';
         try {
-          const date = new Date(dateString);
-          return date.toISOString().split('T')[0]; // YYYY-MM-DD format
+          return new Date(date).toISOString().split('T')[0]; // YYYY-MM-DD format
         } catch (e) {
-          console.warn(`Invalid date format: ${dateString}`);
-          return dateString;
+          console.warn(`Invalid date format: ${date}`);
+          return '';
         }
       };
       
       // Calculate nights if not present
       let nightsCount = booking.nights;
-      if (!nightsCount && booking.check_in && booking.check_out) {
+      if (!nightsCount && booking.checkIn && booking.checkOut) {
         try {
-          const checkIn = new Date(booking.check_in);
-          const checkOut = new Date(booking.check_out);
+          const checkIn = new Date(booking.checkIn);
+          const checkOut = new Date(booking.checkOut);
           const diffTime = Math.abs(checkOut - checkIn);
           nightsCount = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
         } catch (e) {
@@ -148,60 +121,54 @@ const getAllBookings = async (req, res, next) => {
         }
       }
       
-      // Get clean room data with fallbacks
-      const room = booking.rooms || {};
-      
-      // Get clean user data with fallbacks
-      const user = booking.users || {};
-      
       // Create a clean booking response object
       return {
         id: booking.id,
-        booking_id: booking.booking_id || `BK-${Date.now().toString().slice(-6)}`,
+        booking_id: booking.bookingId || `BK-${Date.now().toString().slice(-6)}`,
         
         // Room information
-        roomId: booking.room_id,
-        roomTitle: room.title || 'Unknown Room',
-        roomImage: room.image_url || '/images/room-placeholder.jpg',
-        roomCategory: room.category || '',
-        roomPrice: parseFloat(room.price) || 0,
-        roomLocation: room.location || '',
+        roomId: booking.roomId,
+        roomTitle: room?.title || booking.roomTitle || 'Unknown Room',
+        roomImage: room?.imageUrl || booking.roomImage || '/images/room-placeholder.jpg',
+        roomCategory: room?.category || booking.roomCategory || '',
+        roomPrice: room?.price ? parseFloat(room.price) : (parseFloat(booking.totalPrice) / (nightsCount || 1)),
+        roomLocation: room?.location || booking.location || '',
         
         // User information
-        userId: booking.user_id,
-        userName: user.name || booking.user_name || '',
-        userEmail: user.email || booking.user_email || '',
-        userProfilePic: user.profile_pic || '/images/default-user.png',
+        userId: booking.userId,
+        userName: user?.name || `${booking.firstName} ${booking.lastName}`.trim() || '',
+        userEmail: user?.email || booking.email || '',
+        userProfilePic: user?.profilePic || '/images/default-user.png',
         
         // Booking details
-        checkIn: formatDate(booking.check_in),
-        checkOut: formatDate(booking.check_out),
-        totalPrice: parseFloat(booking.total_price) || 0,
+        checkIn: formatDate(booking.checkIn),
+        checkOut: formatDate(booking.checkOut),
+        totalPrice: parseFloat(booking.totalPrice) || 0,
         nights: nightsCount || 1,
         status: booking.status || 'pending',
-        paymentMethod: booking.payment_method || 'credit_card',
-        paymentStatus: booking.payment_status || 'pending',
+        // paymentMethod: booking.paymentMethod || 'credit_card', // Not in schema
+        paymentStatus: booking.paymentStatus || 'pending',
         
         // Additional information
-        specialRequests: booking.special_requests || '',
+        specialRequests: booking.specialRequests || '',
         adults: parseInt(booking.adults) || 1,
-        children: parseInt(booking.children) || 0,
-        createdAt: booking.created_at,
-        updatedAt: booking.updated_at || booking.created_at
+        children: 0, // Schema: guests is integer
+        createdAt: booking.createdAt,
+        updatedAt: booking.updatedAt || booking.createdAt
       };
     });
 
     // Calculate pagination info
-    const totalPages = Math.ceil(count / limit) || 1;
+    const totalPages = Math.ceil(totalCount / limit) || 1;
 
     // Return well-structured response
     return res.status(200).json({
       success: true,
-      count: parseInt(count) || 0,
+      count: parseInt(totalCount) || 0,
       pagination: {
         currentPage: page,
         totalPages: totalPages,
-        totalItems: parseInt(count) || 0,
+        totalItems: parseInt(totalCount) || 0,
         itemsPerPage: limit,
         hasNextPage: page < totalPages,
         hasPrevPage: page > 1
@@ -230,56 +197,56 @@ const updateBookingStatus = async (req, res, next) => {
     }
 
     // Update booking status
-    const { data: updatedBooking, error } = await supabaseClient
-      .from('bookings')
-      .update({
+    const [updatedBooking] = await db
+      .update(bookings)
+      .set({
         status,
-        updated_at: new Date().toISOString()
+        updatedAt: new Date()
       })
-      .eq('id', id)
-      .select(`
-        *,
-        rooms:room_id (
-          title,
-          image_url,
-          category,
-          price,
-          location
-        ),
-        users:user_id (
-          name,
-          email
-        )
-      `)
-      .single();
+      .where(eq(bookings.id, id))
+      .returning();
 
-    if (error) {
-      return next(new AppError(error.message, 500));
+    if (!updatedBooking) {
+        return next(new AppError('Booking not found or update failed', 404));
     }
+
+    // Fetch related updated data
+    const [result] = await db
+        .select({
+            booking: bookings,
+            room: rooms,
+            user: users
+        })
+        .from(bookings)
+        .leftJoin(rooms, eq(bookings.roomId, rooms.id))
+        .leftJoin(users, eq(bookings.userId, users.id))
+        .where(eq(bookings.id, id));
+
+    const { booking, room, user } = result;
 
     // Transform data for frontend compatibility
     const bookingResponse = {
-      id: updatedBooking.id,
-      roomId: updatedBooking.room_id,
-      roomTitle: updatedBooking.rooms?.title || '',
-      roomImage: updatedBooking.rooms?.image_url || '',
-      roomCategory: updatedBooking.rooms?.category || '',
-      roomPrice: updatedBooking.rooms?.price || 0,
-      roomLocation: updatedBooking.rooms?.location || '',
-      userId: updatedBooking.user_id,
-      userName: updatedBooking.users?.name || '',
-      userEmail: updatedBooking.users?.email || '',
-      checkIn: updatedBooking.check_in,
-      checkOut: updatedBooking.check_out,
-      totalPrice: updatedBooking.total_price,
-      nights: updatedBooking.nights,
-      status: updatedBooking.status,
-      paymentMethod: updatedBooking.payment_method,
-      specialRequests: updatedBooking.special_requests,
-      adults: updatedBooking.adults,
-      children: updatedBooking.children,
-      createdAt: updatedBooking.created_at,
-      updatedAt: updatedBooking.updated_at
+      id: booking.id,
+      roomId: booking.roomId,
+      roomTitle: room?.title || booking.roomTitle || '',
+      roomImage: room?.imageUrl || booking.roomImage || '',
+      roomCategory: room?.category || booking.roomCategory || '',
+      roomPrice: room?.price ? parseFloat(room.price) : 0,
+      roomLocation: room?.location || booking.location || '',
+      userId: booking.userId,
+      userName: user?.name || `${booking.firstName} ${booking.lastName}` || '',
+      userEmail: user?.email || booking.email || '',
+      checkIn: booking.checkIn,
+      checkOut: booking.checkOut,
+      totalPrice: parseFloat(booking.totalPrice) || 0,
+      nights: booking.nights,
+      status: booking.status,
+      // paymentMethod: booking.paymentMethod,
+      specialRequests: booking.specialRequests,
+      adults: booking.adults,
+      children: 0,
+      createdAt: booking.createdAt,
+      updatedAt: booking.updatedAt
     };
 
     res.status(200).json({

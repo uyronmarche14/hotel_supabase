@@ -5,7 +5,9 @@
 
 const { validationResult } = require('express-validator');
 const bcrypt = require('bcrypt');
-const { supabaseClient } = require('../../config/supabase');
+const { db } = require('../../db');
+const { users } = require('../../db/schema');
+const { eq } = require('drizzle-orm');
 const AppError = require('../../utils/appError');
 const { generateToken } = require('../../utils/jwt');
 
@@ -27,13 +29,9 @@ const register = async (req, res, next) => {
     const { name, email, password } = req.body;
 
     // Check if user already exists
-    const { data: existingUser } = await supabaseClient
-      .from('users')
-      .select('email')
-      .eq('email', email)
-      .single();
+    const existingUsers = await db.select().from(users).where(eq(users.email, email));
 
-    if (existingUser) {
+    if (existingUsers.length > 0) {
       return res.status(400).json({
         success: false,
         message: 'User with this email already exists'
@@ -45,32 +43,22 @@ const register = async (req, res, next) => {
     const hashedPassword = await bcrypt.hash(password, salt);
 
     // Create user in Supabase
-    const { data: newUser, error } = await supabaseClient
-      .from('users')
-      .insert([
-        {
-          name,
-          email,
-          password: hashedPassword,
-          role: 'user'
-        }
-      ])
-      .select('id, name, email, role')
-      .single();
-
-    if (error) {
-      return next(new AppError(error.message, 500));
-    }
+    const [newUser] = await db.insert(users).values({
+      name,
+      email,
+      password: hashedPassword,
+      role: 'user'
+    }).returning({
+      id: users.id,
+      name: users.name,
+      email: users.email,
+      role: users.role
+    });
 
     res.status(201).json({
       success: true,
       message: 'User registered successfully',
-      user: {
-        id: newUser.id,
-        name: newUser.name,
-        email: newUser.email,
-        role: newUser.role
-      }
+      user: newUser
     });
   } catch (error) {
     next(new AppError(error.message, 500));
@@ -94,14 +82,13 @@ const login = async (req, res, next) => {
 
     const { email, password } = req.body;
 
-    // Get user from Supabase
-    const { data: user, error } = await supabaseClient
-      .from('users')
-      .select('id, name, email, password, role, profile_pic')
-      .eq('email', email)
-      .single();
+    // Get user from DB
+    const [user] = await db
+      .select()
+      .from(users)
+      .where(eq(users.email, email));
 
-    if (error || !user) {
+    if (!user) {
       return res.status(401).json({
         success: false,
         message: 'Invalid credentials'
@@ -147,7 +134,7 @@ const login = async (req, res, next) => {
         name: userWithoutPassword.name,
         email: userWithoutPassword.email,
         role: userWithoutPassword.role,
-        profilePic: user.profile_pic
+        profilePic: user.profilePic
       },
       token
     });
@@ -163,14 +150,10 @@ const adminLogin = async (req, res, next) => {
   try {
     const { email, password } = req.body;
 
-    // Get user from Supabase
-    const { data: user, error } = await supabaseClient
-      .from('users')
-      .select('id, name, email, password, role, profile_pic')
-      .eq('email', email)
-      .single();
+    // Get user from DB
+    const [user] = await db.select().from(users).where(eq(users.email, email));
 
-    if (error || !user) {
+    if (!user) {
       return res.status(401).json({
         success: false,
         message: 'Invalid credentials'
@@ -216,7 +199,7 @@ const adminLogin = async (req, res, next) => {
         name: userWithoutPassword.name,
         email: userWithoutPassword.email,
         role: userWithoutPassword.role,
-        profilePic: user.profile_pic
+        profilePic: user.profilePic
       },
       token
     });

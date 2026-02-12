@@ -4,6 +4,9 @@ const helmet = require('helmet');
 const morgan = require('morgan');
 const cookieParser = require('cookie-parser');
 const dotenv = require('dotenv');
+const compression = require('compression');
+const rateLimit = require('express-rate-limit');
+const hpp = require('hpp');
 const errorHandler = require('./middleware/errorHandler');
 const { refreshTokenIfNeeded } = require('./middleware/auth.middleware');
 
@@ -22,9 +25,26 @@ const adminAuthRoutes = require('./routes/admin.auth.routes');
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// Middleware
+// Security Middleware
 app.use(helmet()); // Security headers
-app.use(morgan('dev')); // Logging
+app.use(hpp()); // Prevent HTTP Parameter Pollution
+
+// Performance Middleware
+app.use(compression()); // Compress responses
+
+// Rate Limiting
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // Limit each IP to 100 requests per windowMs
+  standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
+  legacyHeaders: false, // Disable the `X-RateLimit-*` headers
+  message: 'Too many requests from this IP, please try again after 15 minutes'
+});
+app.use('/api', limiter); // Apply to API routes
+
+// Logging
+app.use(morgan('dev'));
+
 // Configure CORS with specific options for frontend compatibility
 app.use(cors({
   origin: function(origin, callback) {
@@ -36,10 +56,11 @@ app.use(cors({
       'http://localhost:3001',
       'http://localhost:3002',
       'http://localhost:3003',
+      'http://localhost:7000', // Frontend Development Port (CRITICAL FIX)
       process.env.CORS_ORIGIN
     ].filter(Boolean); // Remove undefined/null values
     
-    if (allowedOrigins.indexOf(origin) !== -1 || !origin) {
+    if (allowedOrigins.indexOf(origin) !== -1) {
       callback(null, true);
     } else {
       callback(new Error('Not allowed by CORS'));

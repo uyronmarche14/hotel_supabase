@@ -3,7 +3,9 @@
  * Handles fetching dashboard statistics and data
  */
 
-const { supabaseClient } = require('../../config/supabase');
+const { db } = require('../../db');
+const { users, rooms, bookings } = require('../../db/schema');
+const { count, desc, sql, eq } = require('drizzle-orm');
 const AppError = require('../../utils/appError');
 
 /**
@@ -12,93 +14,58 @@ const AppError = require('../../utils/appError');
 const getDashboardStats = async (req, res, next) => {
   try {
     // Get total users count
-    const { count: totalUsers, error: usersError } = await supabaseClient
-      .from('users')
-      .select('*', { count: 'exact', head: true });
-    
-    if (usersError) {
-      return next(new AppError(usersError.message, 500));
-    }
+    // Get total users count
+    const [usersCount] = await db.select({ count: count() }).from(users);
     
     // Get total rooms count
-    const { count: totalRooms, error: roomsError } = await supabaseClient
-      .from('rooms')
-      .select('*', { count: 'exact', head: true });
-    
-    if (roomsError) {
-      return next(new AppError(roomsError.message, 500));
-    }
+    const [roomsCount] = await db.select({ count: count() }).from(rooms);
     
     // Get total bookings count
-    const { count: totalBookings, error: bookingsCountError } = await supabaseClient
-      .from('bookings')
-      .select('*', { count: 'exact', head: true });
-    
-    if (bookingsCountError) {
-      return next(new AppError(bookingsCountError.message, 500));
-    }
+    const [bookingsCount] = await db.select({ count: count() }).from(bookings);
     
     // Get recent bookings
-    const { data: recentBookings, error: bookingsError } = await supabaseClient
-      .from('bookings')
-      .select(`
-        id,
-        user_id,
-        room_id,
-        check_in,
-        check_out,
-        total_price,
-        status,
-        created_at,
-        rooms:room_id (title, category, image_url),
-        users:user_id (name, email, profile_pic)
-      `)
-      .order('created_at', { ascending: false })
-      .limit(5);
-    
-    if (bookingsError) {
-      return next(new AppError(bookingsError.message, 500));
-    }
-    
-    // Transform recent bookings for frontend compatibility
-    const formattedRecentBookings = recentBookings.map(booking => ({
-      id: booking.id,
-      userId: booking.user_id,
-      userName: booking.users?.name || 'Unknown',
-      userEmail: booking.users?.email || 'Unknown',
-      userProfilePic: booking.users?.profile_pic || null,
-      roomId: booking.room_id,
-      roomTitle: booking.rooms?.title || 'Unknown',
-      roomCategory: booking.rooms?.category || 'Unknown',
-      roomImage: booking.rooms?.image_url || null,
-      checkIn: booking.check_in,
-      checkOut: booking.check_out,
-      totalPrice: booking.total_price,
-      status: booking.status,
-      createdAt: booking.created_at
-    }));
-    
+    const recentBookingsData = await db.select({
+      id: bookings.id,
+      userId: bookings.userId,
+      userName: users.name,
+      userEmail: users.email,
+      userProfilePic: users.profilePic,
+      roomId: bookings.roomId,
+      roomTitle: rooms.title,
+      roomCategory: rooms.category,
+      roomImage: rooms.imageUrl,
+      checkIn: bookings.checkIn,
+      checkOut: bookings.checkOut,
+      totalPrice: bookings.totalPrice,
+      status: bookings.status,
+      createdAt: bookings.createdAt
+    })
+    .from(bookings)
+    .leftJoin(users, eq(bookings.userId, users.id))
+    .leftJoin(rooms, eq(bookings.roomId, rooms.id))
+    .orderBy(desc(bookings.createdAt))
+    .limit(5);
+
     // Get revenue stats
-    const { data: bookings, error: revenueError } = await supabaseClient
-      .from('bookings')
-      .select('total_price, status, created_at')
-      .not('status', 'eq', 'cancelled');
+    const revenueData = await db
+      .select({
+        totalPrice: bookings.totalPrice,
+        createdAt: bookings.createdAt
+      })
+      .from(bookings)
+      .where(sql`${bookings.status} != 'cancelled'`);
     
-    if (revenueError) {
-      return next(new AppError(revenueError.message, 500));
-    }
-    
-    const totalRevenue = bookings.reduce((sum, booking) => sum + (booking.total_price || 0), 0);
+    const totalRevenue = revenueData.reduce((sum, booking) => sum + (parseFloat(booking.totalPrice) || 0), 0);
     
     // Get monthly revenue for the current year
     const currentYear = new Date().getFullYear();
     const monthlyRevenue = Array(12).fill(0);
     
-    bookings.forEach(booking => {
-      const bookingDate = new Date(booking.created_at);
+    revenueData.forEach(booking => {
+      const bookingDate = new Date(booking.createdAt);
       if (bookingDate.getFullYear() === currentYear) {
         const month = bookingDate.getMonth();
-        monthlyRevenue[month] += booking.total_price || 0;
+        monthlyRevenue[month] += parseFloat(booking.totalPrice) || 0;
       }
     });
     
@@ -110,50 +77,41 @@ const getDashboardStats = async (req, res, next) => {
       completed: 0
     };
     
-    const { data: statusData, error: statusError } = await supabaseClient
-      .from('bookings')
-      .select('status');
+    const statusData = await db
+      .select({ status: bookings.status })
+      .from(bookings);
     
-    if (!statusError && statusData) {
-      statusData.forEach(booking => {
-        if (statusCounts.hasOwnProperty(booking.status)) {
-          statusCounts[booking.status]++;
-        }
-      });
-    }
+    statusData.forEach(booking => {
+      if (statusCounts.hasOwnProperty(booking.status)) {
+        statusCounts[booking.status]++;
+      }
+    });
     
     // Get recent users
-    const { data: recentUsers, error: recentUsersError } = await supabaseClient
-      .from('users')
-      .select('id, name, email, role, profile_pic, created_at')
-      .order('created_at', { ascending: false })
+    const recentUsersData = await db
+      .select({
+        id: users.id,
+        name: users.name,
+        email: users.email,
+        role: users.role,
+        profilePic: users.profilePic,
+        createdAt: users.createdAt
+      })
+      .from(users)
+      .orderBy(desc(users.createdAt))
       .limit(5);
-    
-    if (recentUsersError) {
-      return next(new AppError(recentUsersError.message, 500));
-    }
-    
-    // Transform recent users for frontend compatibility
-    const formattedRecentUsers = recentUsers.map(user => ({
-      id: user.id,
-      name: user.name,
-      email: user.email,
-      role: user.role,
-      profilePic: user.profile_pic,
-      createdAt: user.created_at
-    }));
     
     res.status(200).json({
       success: true,
       dashboard: {
-        totalUsers: totalUsers || 0,
-        totalRooms: totalRooms || 0,
-        totalBookings: totalBookings || 0,
+        totalUsers: usersCount?.count || 0,
+        totalRooms: roomsCount?.count || 0,
+        totalBookings: bookingsCount?.count || 0,
         totalRevenue: parseFloat(totalRevenue.toFixed(2)),
         monthlyRevenue: monthlyRevenue.map(amount => parseFloat(amount.toFixed(2))),
         statusCounts,
-        recentBookings: formattedRecentBookings,
-        recentUsers: formattedRecentUsers
+        recentBookings: recentBookingsData,
+        recentUsers: recentUsersData
       }
     });
   } catch (error) {

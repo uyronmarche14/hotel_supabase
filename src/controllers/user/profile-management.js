@@ -5,7 +5,9 @@
 
 const { validationResult } = require('express-validator');
 const bcrypt = require('bcrypt');
-const { supabaseClient } = require('../../config/supabase');
+const { db } = require('../../db');
+const { users } = require('../../db/schema');
+const { eq, ne, and } = require('drizzle-orm');
 const AppError = require('../../utils/appError');
 const { uploadProfilePicture, deleteProfilePicture } = require('../../utils/storage/profileStorage');
 
@@ -16,13 +18,19 @@ const getUserProfile = async (req, res, next) => {
   try {
     const userId = req.user.id;
 
-    const { data: user, error } = await supabaseClient
-      .from('users')
-      .select('id, name, email, role, profile_pic, created_at')
-      .eq('id', userId)
-      .single();
+    const [user] = await db
+      .select({
+        id: users.id,
+        name: users.name,
+        email: users.email,
+        role: users.role,
+        profilePic: users.profilePic,
+        createdAt: users.createdAt
+      })
+      .from(users)
+      .where(eq(users.id, userId));
 
-    if (error || !user) {
+    if (!user) {
       return next(new AppError('User not found', 404));
     }
 
@@ -32,8 +40,8 @@ const getUserProfile = async (req, res, next) => {
       name: user.name,
       email: user.email,
       role: user.role,
-      profilePic: user.profile_pic,
-      createdAt: user.created_at
+      profilePic: user.profilePic,
+      createdAt: user.createdAt
     };
 
     res.status(200).json({
@@ -64,20 +72,17 @@ const updateUserProfile = async (req, res, next) => {
     const { name, email, profilePic } = req.body;
     
     // Get current user data to check for existing profile pic
-    const { data: currentUser } = await supabaseClient
-      .from('users')
-      .select('profile_pic')
-      .eq('id', userId)
-      .single();
+    const [currentUser] = await db
+      .select({ profilePic: users.profilePic })
+      .from(users)
+      .where(eq(users.id, userId));
 
     // If email is being updated, check if it's already in use
     if (email) {
-      const { data: existingUser } = await supabaseClient
-        .from('users')
-        .select('id')
-        .eq('email', email)
-        .neq('id', userId)
-        .single();
+      const [existingUser] = await db
+        .select()
+        .from(users)
+        .where(and(eq(users.email, email), ne(users.id, userId)));
 
       if (existingUser) {
         return res.status(400).json({
@@ -92,8 +97,8 @@ const updateUserProfile = async (req, res, next) => {
     if (req.file) {
       try {
         // Delete old profile picture if exists
-        if (currentUser && currentUser.profile_pic) {
-          await deleteProfilePicture(currentUser.profile_pic);
+        if (currentUser && currentUser.profilePic) {
+          await deleteProfilePicture(currentUser.profilePic);
         }
         
         // Upload new profile picture
@@ -109,22 +114,19 @@ const updateUserProfile = async (req, res, next) => {
       }
     }
 
-    // Update user profile
-    const { data: updatedUser, error } = await supabaseClient
-      .from('users')
-      .update({
-        name,
-        email,
-        profile_pic: profilePicUrl,
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', userId)
-      .select('id, name, email, role, profile_pic, created_at, updated_at')
-      .single();
+    // Prepare update data
+    const updateData = {};
+    if (name !== undefined) updateData.name = name;
+    if (email !== undefined) updateData.email = email;
+    if (profilePicUrl !== undefined) updateData.profilePic = profilePicUrl;
+    updateData.updatedAt = new Date();
 
-    if (error) {
-      return next(new AppError(error.message, 500));
-    }
+    // Update user profile
+    const [updatedUser] = await db
+      .update(users)
+      .set(updateData)
+      .where(eq(users.id, userId))
+      .returning();
     
     // Transform response for frontend compatibility
     const userResponse = {
@@ -132,9 +134,9 @@ const updateUserProfile = async (req, res, next) => {
       name: updatedUser.name,
       email: updatedUser.email,
       role: updatedUser.role,
-      profilePic: updatedUser.profile_pic,
-      createdAt: updatedUser.created_at,
-      updatedAt: updatedUser.updated_at
+      profilePic: updatedUser.profilePic,
+      createdAt: updatedUser.createdAt,
+      updatedAt: updatedUser.updatedAt
     };
 
     res.status(200).json({
@@ -166,13 +168,12 @@ const changePassword = async (req, res, next) => {
     const { currentPassword, newPassword } = req.body;
 
     // Get user from database
-    const { data: user, error } = await supabaseClient
-      .from('users')
-      .select('password')
-      .eq('id', userId)
-      .single();
+    const [user] = await db
+      .select({ password: users.password })
+      .from(users)
+      .where(eq(users.id, userId));
 
-    if (error || !user) {
+    if (!user) {
       return next(new AppError('User not found', 404));
     }
 
@@ -190,17 +191,13 @@ const changePassword = async (req, res, next) => {
     const hashedPassword = await bcrypt.hash(newPassword, salt);
 
     // Update password
-    const { error: updateError } = await supabaseClient
-      .from('users')
-      .update({
+    await db
+      .update(users)
+      .set({
         password: hashedPassword,
-        updated_at: new Date().toISOString()
+        updatedAt: new Date()
       })
-      .eq('id', userId);
-
-    if (updateError) {
-      return next(new AppError(updateError.message, 500));
-    }
+      .where(eq(users.id, userId));
 
     res.status(200).json({
       success: true,

@@ -12,15 +12,10 @@ const AppError = require('../../utils/appError');
  */
 const getCurrentUser = async (req, res, next) => {
   try {
-    const userId = req.user.id;
+    // User is already attached to verifyToken middleware
+    const user = req.user;
 
-    const { data: user, error } = await supabaseClient
-      .from('users')
-      .select('id, name, email, role, profile_pic')
-      .eq('id', userId)
-      .single();
-
-    if (error || !user) {
+    if (!user) {
       return next(new AppError('User not found', 404));
     }
 
@@ -31,7 +26,7 @@ const getCurrentUser = async (req, res, next) => {
         name: user.name,
         email: user.email,
         role: user.role,
-        profilePic: user.profile_pic
+        profilePic: user.profilePic
       }
     });
   } catch (error) {
